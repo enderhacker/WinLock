@@ -235,6 +235,7 @@ class ScreenLocker:
             lock_window.title("WinLock - Bloqueado")
             lock_window.attributes("-fullscreen", True)
             lock_window.attributes("-topmost", True)
+            lock_window.config(cursor="none")
             lock_window.configure(bg="#1c1c1c")
             lock_window.protocol("WM_DELETE_WINDOW", lambda: None)
 
@@ -366,8 +367,30 @@ class ScreenLocker:
                     unlock_entry.delete(0, tk.END)
                     status_label.after(3000, lambda: status_label.config(text=""))
 
-            lock_window.bind("<Return>", check_password)
+            start_time = time.time()
 
+            def focus_safe():
+                try:
+                    unlock_entry.focus_force()
+                except:
+                    pass
+                elapsed = time.time() - start_time
+                interval = 100 if elapsed < 3 else 5000
+                lock_window.after(interval, focus_safe)
+
+            lock_window.after(0, focus_safe)
+
+            def refocus_on_click(event=None):
+                try:
+                    unlock_entry.focus_force()
+                except:
+                    pass
+
+            lock_window.bind_all("<Button-1>", refocus_on_click)
+            lock_window.bind_all("<Button-2>", refocus_on_click)
+            lock_window.bind_all("<Button-3>", refocus_on_click)
+            lock_window.bind_all("<MouseWheel>", refocus_on_click)
+            lock_window.bind("<Return>", check_password)
         except Exception:
             self._quit_app()
 
