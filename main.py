@@ -464,30 +464,43 @@ class WinLock:
                     unlock_entry.delete(0, tk.END)
                     status_label.after(3000, lambda: status_label.config(text=""))
 
-            def redirect_keys(event):
-                try:
-                    unlock_entry.focus_set()
-                except:
-                    pass
-                return "break"
-
-            lock_window.bind_all("<Key>", redirect_keys)
             unlock_entry.bind("<Key>", allow_only_typing_and_enter)
             lock_window.bind("<Return>", check_password)
 
-            def refocus_on_click(event=None):
-                try:
+            def refocus_on_click(event):
+                if event.widget != unlock_entry:
                     unlock_entry.focus_set()
-                except:
-                    pass
 
             lock_window.bind_all("<Button-1>", refocus_on_click)
             lock_window.bind_all("<Button-2>", refocus_on_click)
             lock_window.bind_all("<Button-3>", refocus_on_click)
             lock_window.bind_all("<MouseWheel>", refocus_on_click)
 
-            cx, cy = user32.GetSystemMetrics(0) // 2, user32.GetSystemMetrics(1) // 2
-            lock_window.bind_all("<Motion>", lambda e: user32.SetCursorPos(cx, cy))
+            def center_cursor():
+                cx, cy = (
+                    user32.GetSystemMetrics(0) // 2,
+                    user32.GetSystemMetrics(1) // 2,
+                )
+                user32.SetCursorPos(cx, cy)
+                lock_window.after(250, center_cursor)
+
+            center_cursor()
+
+            # unlock_entry.focus_set()
+            def persistent_focus():
+                """Asegura que el campo de contraseña siempre tenga el foco."""
+                try:
+                    if (
+                        lock_window.winfo_exists()
+                        and lock_window.focus_get() != unlock_entry
+                    ):
+                        unlock_entry.focus_set()
+                    lock_window.after(200, persistent_focus)
+                except tk.TclError:
+                    pass
+
+            # Iniciar el bucle de enfoque
+            # persistent_focus()
             write_log(
                 "Pantalla de bloqueo creada y visible. Control de ratón y teclado activado."
             )
