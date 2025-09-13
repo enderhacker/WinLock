@@ -83,6 +83,7 @@ def resource_path(relative_path):
 
 def start_explorer_if_not_running():
     """Verifica si explorer.exe se está ejecutando y lo inicia si no es así."""
+    write_log("Revisando el estado de explorer.exe.")
     explorer_running = any(
         proc.name().lower() == "explorer.exe" for proc in psutil.process_iter()
     )
@@ -132,6 +133,7 @@ class WinLock:
         self.root.protocol("WM_DELETE_WINDOW", self._quit_app)
         try:
             self.root.iconbitmap(resource_path("winlock.ico"))
+            write_log("Icono 'winlock.ico' cargado para la ventana principal.")
         except Exception as e:
             write_log(f"ADVERTENCIA: No se pudo cargar el icono 'winlock.ico': {e}")
 
@@ -201,7 +203,7 @@ class WinLock:
             write_log("Validación fallida: la contraseña está vacía.")
             messagebox.showwarning(
                 "Atención",
-                "La contraseña debe tener al menos 1 caracter.",
+                "La contraseña no puede estar vacía.",
                 parent=self.root,
             )
             return
@@ -229,7 +231,9 @@ class WinLock:
             self.root.withdraw()
             self.start_locking_process()
         else:
-            write_log("Usuario canceló el bloqueo del ordenador.")
+            write_log(
+                "Usuario canceló el bloqueo del ordenador. Mostrando de nuevo la configuración."
+            )
             self.create_setup_window()
 
     def start_locking_process(self):
@@ -238,6 +242,7 @@ class WinLock:
         self.lock_start_time = time.time()
         self.start_watchdog()
         try:
+            # Previene que el sistema entre en modo de suspensión
             ctypes.windll.kernel32.SetThreadExecutionState(
                 0x80000000 | 0x00000001 | 0x00000002
             )
@@ -262,10 +267,10 @@ class WinLock:
                     proc_name = proc.info["name"]
                     proc.kill()
                     write_log(
-                        f"Proceso objetivo terminado por el watchdog: {proc_name}"
+                        f"Proceso objetivo terminado por el watchdog: {proc_name} (PID: {proc.info['pid']})"
                     )
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                pass
+                continue
             except Exception as e:
                 write_log(
                     f"Error inesperado en watchdog al intentar matar proceso: {e}"
@@ -323,7 +328,7 @@ class WinLock:
 
     def create_lock_screen(self):
         """Crea la ventana de la pantalla de bloqueo de alta seguridad."""
-        write_log("Creando la pantalla de bloqueo.")
+        write_log("Iniciando la creación de la pantalla de bloqueo.")
         user32 = ctypes.windll.user32
 
         self._hide_system_cursor()
@@ -339,29 +344,16 @@ class WinLock:
             # --- Configuración de ventana ---
             lock_window.title("WinLock - Bloqueado")
             lock_window.attributes("-fullscreen", True)
+            write_log("Atributo '-fullscreen' establecido en True.")
             lock_window.attributes("-topmost", True)
+            write_log("Atributo '-topmost' establecido en True.")
             lock_window.config(cursor="none", bg="#1c1c1c")
             lock_window.overrideredirect(True)
             lock_window.protocol("WM_DELETE_WINDOW", lambda: None)
-            lock_window.focus_set()
-            lock_window.grab_set()
 
-            def allow_only_typing_and_enter(event):
-                allowed_keys = (
-                    "Return",
-                    "BackSpace",
-                    "Delete",
-                    "Insert",
-                    "Left",
-                    "Right",
-                    "Up",
-                    "Down",
-                )
-                if event.keysym in allowed_keys:
-                    return
-                if len(event.char) == 1 and event.char.isprintable():
-                    return
-                return "break"
+            # Capturar todo el input del ratón y teclado para esta ventana
+            lock_window.grab_set()
+            write_log("Input grab_set() activado. Los clicks no deberían pasar.")
 
             # --- Contenido UI ---
             tk.Label(
@@ -387,6 +379,24 @@ class WinLock:
             def update_time_and_duration():
                 time_label.config(text=time.strftime("%H:%M"))
                 date_str = time.strftime("%A, %d de %B de %Y").capitalize()
+                replacements = {
+                    "á": "a",
+                    "Á": "A",
+                    "é": "e",
+                    "É": "E",
+                    "í": "i",
+                    "Í": "I",
+                    "ó": "o",
+                    "Ó": "O",
+                    "ú": "u",
+                    "Ú": "U",
+                    "ñ": "n",
+                    "Ñ": "N",
+                    "ç": "c",
+                    "Ç": "C",
+                }
+                for bad, good in replacements.items():
+                    date_str = date_str.replace(bad, good)
                 date_label.config(text=date_str)
 
                 delta = int(time.time() - self.lock_start_time)
@@ -422,7 +432,6 @@ class WinLock:
                 width=25,
             )
             unlock_entry.pack(pady=(15, 8), ipady=10)
-            unlock_entry.focus_force()
 
             status_label = tk.Label(
                 center_frame, text="", font=("Segoe UI", 11), fg="#ff3b30", bg="#1c1c1c"
@@ -454,7 +463,11 @@ class WinLock:
             ).pack(pady=(5, 0))
 
             def check_password(event=None):
-                if unlock_entry.get() == self.unlock_password:
+                entered_pass = unlock_entry.get()
+                write_log(
+                    f"Intento de desbloqueo con contraseña de longitud: {len(entered_pass)}."
+                )
+                if entered_pass == self.unlock_password:
                     write_log("Contraseña correcta introducida. Desbloqueando.")
                     lock_window.destroy()
                     self._quit_app()
@@ -464,43 +477,47 @@ class WinLock:
                     unlock_entry.delete(0, tk.END)
                     status_label.after(3000, lambda: status_label.config(text=""))
 
-            unlock_entry.bind("<Key>", allow_only_typing_and_enter)
             lock_window.bind("<Return>", check_password)
 
-            def refocus_on_click(event):
-                if event.widget != unlock_entry:
-                    unlock_entry.focus_set()
-
-            lock_window.bind_all("<Button-1>", refocus_on_click)
-            lock_window.bind_all("<Button-2>", refocus_on_click)
-            lock_window.bind_all("<Button-3>", refocus_on_click)
-            lock_window.bind_all("<MouseWheel>", refocus_on_click)
-
             def center_cursor():
-                cx, cy = (
-                    user32.GetSystemMetrics(0) // 2,
-                    user32.GetSystemMetrics(1) // 2,
-                )
-                user32.SetCursorPos(cx, cy)
-                lock_window.after(250, center_cursor)
+                """Mantiene el cursor del ratón (aunque invisible) en el centro de la pantalla."""
+                try:
+                    cx, cy = (
+                        user32.GetSystemMetrics(0) // 2,
+                        user32.GetSystemMetrics(1) // 2,
+                    )
+                    user32.SetCursorPos(cx, cy)
+                    if lock_window.winfo_exists():
+                        lock_window.after(250, center_cursor)
+                except Exception:
+                    pass
 
             center_cursor()
 
-            # unlock_entry.focus_set()
             def persistent_focus():
-                """Asegura que el campo de contraseña siempre tenga el foco."""
+                """Mantiene el foco en el campo de contraseña sin falsos positivos."""
                 try:
-                    if (
-                        lock_window.winfo_exists()
-                        and lock_window.focus_get() != unlock_entry
-                    ):
-                        unlock_entry.focus_set()
-                    lock_window.after(200, persistent_focus)
+                    if lock_window.winfo_exists():
+                        current = lock_window.focus_get()
+                        # Solo reenfocar si realmente no está en el entry
+                        if current is None or current != unlock_entry:
+                            unlock_entry.focus_set()
+                            write_log(
+                                "Foco perdido, reenfocado en el campo de contraseña."
+                            )
+                        # volver a planificar
+                        lock_window.after(500, persistent_focus)
                 except tk.TclError:
-                    pass
+                    write_log("Ventana cerrada, deteniendo persistent_focus.")
+                except Exception as e:
+                    write_log(f"Error inesperado en persistent_focus: {e}")
 
-            # Iniciar el bucle de enfoque
-            # persistent_focus()
+            # Dar foco inicial y empezar el bucle de enfoque persistente
+            unlock_entry.focus_force()
+            write_log("Foco inicial forzado en el campo de contraseña.")
+            persistent_focus()
+            write_log("Bucle de enfoque persistente iniciado.")
+
             write_log(
                 "Pantalla de bloqueo creada y visible. Control de ratón y teclado activado."
             )
@@ -517,24 +534,23 @@ class WinLock:
         self.stop_watchdog()
         self._show_system_cursor()
 
-        # Solo destruir si sigue existiendo
         try:
             if hasattr(self, "root") and self.root.winfo_exists():
-                try:
-                    self.root.destroy()
-                except Exception as e:
-                    write_log(f"FALLO al destruir root: {e}")
+                write_log("Destruyendo la ventana raíz de tkinter.")
+                self.root.destroy()
         except Exception as e:
-            write_log(f"FALLO al destruir root antes de comprobar: {e}")
+            write_log(f"FALLO al intentar destruir la ventana raíz: {e}")
 
         start_explorer_if_not_running()
 
         try:
+            # Restaurar el estado de ejecución normal del hilo
             ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
             write_log("Estado de ejecución del hilo restaurado a la normalidad.")
         except Exception as e:
             write_log(f"FALLO al restaurar estado de ejecución del hilo: {e}")
 
+        write_log("Salida de la aplicación completada. sys.exit(0).")
         sys.exit(0)
 
 
@@ -554,10 +570,17 @@ if __name__ == "__main__":
         write_log("Bloque 'finally' alcanzado, asegurando una salida limpia.")
         if app_instance:
             app_instance._quit_app()
+            write_log("Aplicación finalizada.\n" + "=" * 50 + "\n")
         else:
             # En caso de que la app falle antes de instanciarse.
+            write_log(
+                "La instancia de la aplicación no existía, ejecutando limpieza manual."
+            )
             WinLock._show_system_cursor()
             start_explorer_if_not_running()
-            ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+            try:
+                ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+            except Exception:
+                pass
             write_log("Aplicación finalizada.\n" + "=" * 50 + "\n")
             sys.exit(0)
