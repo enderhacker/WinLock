@@ -5,11 +5,14 @@ try:
     from tkinter import ttk, messagebox
     import time
     import ctypes
+    import ctypes.wintypes
     import os
     import sys
     import threading
     import locale
+    from datetime import datetime
 except ImportError:
+    # This part runs if essential libraries are missing. Logging is not available yet.
     root = tk.Tk()
     root.withdraw()
     messagebox.showerror(
@@ -17,6 +20,56 @@ except ImportError:
         "Faltan bibliotecas necesarias. Reinstala la aplicación.",
     )
     sys.exit(1)
+
+# --- CONFIGURACIÓN DEL SISTEMA DE LOGS ---
+
+LOG_FOLDER_NAME = "WinLock"
+LOG_FILE_NAME = "logs.txt"
+
+
+def get_log_path():
+    """Obtiene la ruta para el archivo de logs en una carpeta que no requiere permisos."""
+    try:
+        # APPDATA es la ubicación estándar y preferida para datos de aplicación.
+        app_data_path = os.environ.get("APPDATA")
+        if not app_data_path:
+            # Si APPDATA no está disponible, usar el directorio home del usuario como alternativa.
+            app_data_path = os.path.expanduser("~")
+
+        log_dir = os.path.join(app_data_path, LOG_FOLDER_NAME)
+        return log_dir
+    except Exception:
+        # Como último recurso, usar el directorio del script.
+        return os.path.abspath(".")
+
+
+LOG_DIRECTORY = get_log_path()
+LOG_FILE_PATH = os.path.join(LOG_DIRECTORY, LOG_FILE_NAME)
+
+# Crear el directorio de logs si no existe.
+try:
+    os.makedirs(LOG_DIRECTORY, exist_ok=True)
+except OSError:
+    # Si falla la creación del directorio, no se podrán guardar logs.
+    # Se podría mostrar un error, pero se opta por un fallo silencioso para no interrumpir la app.
+    pass
+
+
+def write_log(message):
+    """Escribe un mensaje detallado con timestamp en el archivo de logs."""
+    try:
+        # Formato de timestamp: Año-Mes-Día Hora:Minuto:Segundo,Milisegundo
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
+        log_entry = f"[{timestamp}] - {message}\n"
+
+        with open(LOG_FILE_PATH, "a", encoding="utf-8") as log_file:
+            log_file.write(log_entry)
+    except Exception as e:
+        # Si la escritura del log falla, se imprime en la consola para no crashear la app.
+        print(f"Error al escribir en el log: {e}", file=sys.stderr)
+
+
+# --- CÓDIGO DE LA APLICACIÓN (con logging integrado) ---
 
 
 def resource_path(relative_path):
@@ -34,21 +87,26 @@ def start_explorer_if_not_running():
         proc.name().lower() == "explorer.exe" for proc in psutil.process_iter()
     )
     if not explorer_running:
+        write_log("explorer.exe no se estaba ejecutando. Intentando iniciarlo.")
         try:
             subprocess.Popen("explorer.exe")
-        except:
-            pass
+            write_log("Comando para iniciar explorer.exe ejecutado.")
+        except Exception as e:
+            write_log(f"FALLO al intentar iniciar explorer.exe: {e}")
+    else:
+        write_log("Verificación completada: explorer.exe ya se está ejecutando.")
 
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 
 
-class ScreenLocker:
+class WinLock:
     """
     WinLock: Una aplicación para bloquear de forma segura y profesional una pantalla de Windows.
     """
 
     def __init__(self, root_window):
+        write_log("Inicializando la aplicación WinLock.")
         self.root = root_window
         self.unlock_password = ""
         self.lock_start_time = 0
@@ -57,18 +115,26 @@ class ScreenLocker:
         self.setup_frame = None
         try:
             locale.setlocale(locale.LC_TIME, "es_ES.UTF-8")
+            write_log("Locale configurado a 'es_ES.UTF-8'.")
         except locale.Error:
             try:
                 locale.setlocale(locale.LC_TIME, "Spanish_Spain.1252")
-            except locale.Error:
-                pass
+                write_log("Locale configurado a 'Spanish_Spain.1252'.")
+            except locale.Error as e:
+                write_log(
+                    f"ADVERTENCIA: No se pudo configurar el locale en español: {e}"
+                )
 
         # --- Configurar la ventana principal ---
         self.root.title("WinLock")
         self.root.geometry("350x200")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._quit_app)
-        self.root.iconbitmap(resource_path("winlock.ico"))
+        try:
+            self.root.iconbitmap(resource_path("winlock.ico"))
+        except Exception as e:
+            write_log(f"ADVERTENCIA: No se pudo cargar el icono 'winlock.ico': {e}")
+
         self.center_window(self.root)
 
         # --- Configuración de estilo ---
@@ -82,6 +148,7 @@ class ScreenLocker:
         self.style.map(
             "Lock.TButton", background=[("active", "#c00000"), ("!disabled", "#e60000")]
         )
+        write_log("Estilos de la interfaz gráfica configurados.")
 
         self.create_setup_window()
 
@@ -93,9 +160,11 @@ class ScreenLocker:
         x = (win.winfo_screenwidth() // 2) - (width // 2)
         y = (win.winfo_screenheight() // 2) - (height // 2)
         win.geometry(f"{width}x{height}+{x}+{y}")
+        write_log(f"Ventana centrada en {x},{y} con tamaño {width}x{height}.")
 
     def create_setup_window(self):
         """Crea la ventana inicial para establecer la contraseña."""
+        write_log("Creando la ventana de configuración de contraseña.")
         if self.setup_frame:
             self.setup_frame.destroy()
 
@@ -120,13 +189,16 @@ class ScreenLocker:
         self.lock_button.pack(pady=0, ipady=0, fill=tk.X)
 
         self.root.bind("<Return>", lambda event: self.validate_and_confirm())
+        write_log("Ventana de configuración de contraseña creada y visible.")
 
     def validate_and_confirm(self):
         """Valida las contraseñas y pide confirmación al usuario antes de bloquear."""
+        write_log("Iniciando validación de contraseña.")
         pwd = self.password_entry.get()
         confirm_pwd = self.confirm_entry.get()
 
         if len(pwd) < 1:
+            write_log("Validación fallida: la contraseña está vacía.")
             messagebox.showwarning(
                 "Atención",
                 "La contraseña debe tener al menos 1 caracter.",
@@ -135,6 +207,7 @@ class ScreenLocker:
             return
 
         if pwd != confirm_pwd:
+            write_log("Validación fallida: las contraseñas no coinciden.")
             messagebox.showerror(
                 "Error",
                 "Las contraseñas no coinciden. Por favor, inténtalo de nuevo.",
@@ -145,24 +218,32 @@ class ScreenLocker:
             self.password_entry.focus_set()
             return
 
+        write_log("Validación de contraseña exitosa.")
         self.unlock_password = pwd
         self.setup_frame.destroy()
 
         if messagebox.askokcancel(
             "Confirmar Bloqueo", "¿Está seguro de que desea bloquear este ordenador?"
         ):
+            write_log("Usuario confirmó el bloqueo del ordenador.")
             self.root.withdraw()
             self.start_locking_process()
         else:
+            write_log("Usuario canceló el bloqueo del ordenador.")
             self.create_setup_window()
 
     def start_locking_process(self):
         """Inicia el watchdog y crea la pantalla de bloqueo."""
+        write_log("Iniciando proceso de bloqueo.")
         self.lock_start_time = time.time()
         self.start_watchdog()
-        ctypes.windll.kernel32.SetThreadExecutionState(
-            0x80000000 | 0x00000001 | 0x00000002
-        )
+        try:
+            ctypes.windll.kernel32.SetThreadExecutionState(
+                0x80000000 | 0x00000001 | 0x00000002
+            )
+            write_log("Estado de ejecución del hilo cambiado para prevenir suspensión.")
+        except Exception as e:
+            write_log(f"FALLO al cambiar estado de ejecución del hilo: {e}")
         self.create_lock_screen()
 
     def _kill_target_processes(self):
@@ -178,15 +259,25 @@ class ScreenLocker:
         for proc in psutil.process_iter(["pid", "name"]):
             try:
                 if proc.info["name"] and proc.info["name"].lower() in targets:
+                    proc_name = proc.info["name"]
                     proc.kill()
+                    write_log(
+                        f"Proceso objetivo terminado por el watchdog: {proc_name}"
+                    )
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 pass
+            except Exception as e:
+                write_log(
+                    f"Error inesperado en watchdog al intentar matar proceso: {e}"
+                )
 
     def _watchdog_loop(self):
         """Se ejecuta continuamente en un hilo para matar procesos no deseados."""
+        write_log("Bucle del watchdog iniciado.")
         while self._watchdog_running:
             self._kill_target_processes()
             time.sleep(0.2)
+        write_log("Bucle del watchdog finalizado.")
 
     def start_watchdog(self):
         """Inicia el hilo de eliminación de procesos en segundo plano."""
@@ -196,10 +287,13 @@ class ScreenLocker:
                 target=self._watchdog_loop, daemon=True
             )
             self._watchdog_thread.start()
+            write_log("Hilo del watchdog iniciado.")
 
     def stop_watchdog(self):
         """Detiene el hilo en segundo plano."""
-        self._watchdog_running = False
+        if self._watchdog_running:
+            self._watchdog_running = False
+            write_log("Señal de detención enviada al watchdog.")
 
     @staticmethod
     def _hide_system_cursor():
@@ -212,8 +306,9 @@ class ScreenLocker:
                 ctypes.windll.user32.GetDesktopWindow(), ctypes.byref(rect)
             )
             ctypes.windll.user32.ClipCursor(ctypes.byref(rect))
-        except Exception:
-            pass
+            write_log("Cursor del sistema ocultado y confinado.")
+        except Exception as e:
+            write_log(f"FALLO al ocultar el cursor: {e}")
 
     @staticmethod
     def _show_system_cursor():
@@ -222,22 +317,34 @@ class ScreenLocker:
             while user32.ShowCursor(True) < 0:
                 pass
             ctypes.windll.user32.ClipCursor(None)
-        except Exception:
-            pass
+            write_log("Cursor del sistema restaurado.")
+        except Exception as e:
+            write_log(f"FALLO al restaurar el cursor: {e}")
 
     def create_lock_screen(self):
         """Crea la ventana de la pantalla de bloqueo de alta seguridad."""
+        write_log("Creando la pantalla de bloqueo.")
+        user32 = ctypes.windll.user32
+
         self._hide_system_cursor()
         lock_window = tk.Toplevel(self.root)
-        lock_window.iconbitmap(resource_path("winlock.ico"))
+        try:
+            lock_window.iconbitmap(resource_path("winlock.ico"))
+        except Exception as e:
+            write_log(
+                f"ADVERTENCIA: No se pudo cargar el icono 'winlock.ico' para la ventana de bloqueo: {e}"
+            )
 
         try:
+            # --- Configuración de ventana ---
             lock_window.title("WinLock - Bloqueado")
             lock_window.attributes("-fullscreen", True)
             lock_window.attributes("-topmost", True)
-            lock_window.config(cursor="none")
-            lock_window.configure(bg="#1c1c1c")
+            lock_window.config(cursor="none", bg="#1c1c1c")
+            lock_window.overrideredirect(True)
             lock_window.protocol("WM_DELETE_WINDOW", lambda: None)
+            lock_window.focus_set()
+            lock_window.grab_set()
 
             def allow_only_typing_and_enter(event):
                 allowed_keys = (
@@ -256,12 +363,7 @@ class ScreenLocker:
                     return
                 return "break"
 
-            lock_window.bind_all("<Key>", allow_only_typing_and_enter)
-
-            lock_window.overrideredirect(True)
-            lock_window.focus_set()
-
-            # --- Contenido de la Pantalla de Bloqueo ---
+            # --- Contenido UI ---
             tk.Label(
                 lock_window,
                 text="WinLock",
@@ -269,7 +371,6 @@ class ScreenLocker:
                 fg="white",
                 bg="#1c1c1c",
             ).pack(pady=(80, 0))
-
             time_label = tk.Label(
                 lock_window, font=("Segoe UI Light", 72), fg="white", bg="#1c1c1c"
             )
@@ -278,7 +379,6 @@ class ScreenLocker:
                 lock_window, font=("Segoe UI Semilight", 22), fg="#A0A0A0", bg="#1c1c1c"
             )
             date_label.pack()
-
             duration_label = tk.Label(
                 lock_window, font=("Segoe UI", 12), fg="#A0A0A0", bg="#1c1c1c"
             )
@@ -293,8 +393,6 @@ class ScreenLocker:
                 days, rem = divmod(delta, 86400)
                 hours, rem = divmod(rem, 3600)
                 minutes, seconds = divmod(rem, 60)
-
-                duration_str = "Tiempo bloqueado: "
                 parts = []
                 if days > 0:
                     parts.append(f"{days}d")
@@ -303,13 +401,12 @@ class ScreenLocker:
                 if minutes > 0:
                     parts.append(f"{minutes}m")
                 parts.append(f"{seconds}s")
-                duration_label.config(text=duration_str + " ".join(parts))
+                duration_label.config(text="Tiempo bloqueado: " + " ".join(parts))
 
                 lock_window.after(1000, update_time_and_duration)
 
             update_time_and_duration()
 
-            # --- Marco de Contenido Central para desbloqueo ---
             center_frame = tk.Frame(lock_window, bg="#1c1c1c")
             center_frame.pack(expand=True)
 
@@ -332,10 +429,8 @@ class ScreenLocker:
             )
             status_label.pack(pady=5)
 
-            # --- Información Inferior ---
             bottom_frame = tk.Frame(lock_window, bg="#1c1c1c")
             bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=20)
-
             tk.Label(
                 bottom_frame,
                 text="El dueño de este ordenador ha bloqueado el ordenador",
@@ -360,29 +455,29 @@ class ScreenLocker:
 
             def check_password(event=None):
                 if unlock_entry.get() == self.unlock_password:
+                    write_log("Contraseña correcta introducida. Desbloqueando.")
                     lock_window.destroy()
                     self._quit_app()
                 else:
+                    write_log("Intento de desbloqueo con contraseña incorrecta.")
                     status_label.config(text="Contraseña incorrecta")
                     unlock_entry.delete(0, tk.END)
                     status_label.after(3000, lambda: status_label.config(text=""))
 
-            start_time = time.time()
-
-            def focus_safe():
+            def redirect_keys(event):
                 try:
-                    unlock_entry.focus_force()
+                    unlock_entry.focus_set()
                 except:
                     pass
-                elapsed = time.time() - start_time
-                interval = 100 if elapsed < 3 else 5000
-                lock_window.after(interval, focus_safe)
+                return "break"
 
-            lock_window.after(0, focus_safe)
+            lock_window.bind_all("<Key>", redirect_keys)
+            unlock_entry.bind("<Key>", allow_only_typing_and_enter)
+            lock_window.bind("<Return>", check_password)
 
             def refocus_on_click(event=None):
                 try:
-                    unlock_entry.focus_force()
+                    unlock_entry.focus_set()
                 except:
                     pass
 
@@ -390,33 +485,66 @@ class ScreenLocker:
             lock_window.bind_all("<Button-2>", refocus_on_click)
             lock_window.bind_all("<Button-3>", refocus_on_click)
             lock_window.bind_all("<MouseWheel>", refocus_on_click)
-            lock_window.bind("<Return>", check_password)
-        except Exception:
+
+            cx, cy = user32.GetSystemMetrics(0) // 2, user32.GetSystemMetrics(1) // 2
+            lock_window.bind_all("<Motion>", lambda e: user32.SetCursorPos(cx, cy))
+            write_log(
+                "Pantalla de bloqueo creada y visible. Control de ratón y teclado activado."
+            )
+
+        except Exception as e:
+            write_log(
+                f"ERROR CRÍTICO al crear la pantalla de bloqueo: {e}. Saliendo para proteger al usuario."
+            )
             self._quit_app()
 
     def _quit_app(self):
         """Detiene todos los procesos y cierra la aplicación de forma segura."""
+        write_log("Iniciando secuencia de salida de la aplicación.")
         self.stop_watchdog()
         self._show_system_cursor()
-        self.root.destroy()
+
+        # Solo destruir si sigue existiendo
+        try:
+            if hasattr(self, "root") and self.root.winfo_exists():
+                try:
+                    self.root.destroy()
+                except Exception as e:
+                    write_log(f"FALLO al destruir root: {e}")
+        except Exception as e:
+            write_log(f"FALLO al destruir root antes de comprobar: {e}")
+
         start_explorer_if_not_running()
-        ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+
+        try:
+            ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+            write_log("Estado de ejecución del hilo restaurado a la normalidad.")
+        except Exception as e:
+            write_log(f"FALLO al restaurar estado de ejecución del hilo: {e}")
+
         sys.exit(0)
 
 
 if __name__ == "__main__":
+    write_log("\n" + "=" * 50 + "\nIniciando nueva sesión de WinLock.")
     app_instance = None
     try:
         root = tk.Tk()
-        app_instance = ScreenLocker(root)
+        app_instance = WinLock(root)
+        write_log("Bucle principal de la aplicación (mainloop) iniciado.")
         root.mainloop()
     except (KeyboardInterrupt, SystemExit):
-        pass
+        write_log("La aplicación fue interrumpida (KeyboardInterrupt/SystemExit).")
+    except Exception as e:
+        write_log(f"ERROR NO CONTROLADO en el hilo principal: {e}")
     finally:
-        # --- MECANISMO A PRUEBA DE FALLOS ---
+        write_log("Bloque 'finally' alcanzado, asegurando una salida limpia.")
         if app_instance:
-            app_instance.stop_watchdog()
-            app_instance._show_system_cursor()
+            app_instance._quit_app()
+        else:
+            # En caso de que la app falle antes de instanciarse.
+            WinLock._show_system_cursor()
             start_explorer_if_not_running()
             ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+            write_log("Aplicación finalizada.\n" + "=" * 50 + "\n")
             sys.exit(0)

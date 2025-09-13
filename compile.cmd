@@ -29,7 +29,7 @@ IF EXIST build (
 
 REM --- Step 3: PyArmor generate runtime ---
 echo Running PyArmor...
-"%PYARMOR_PATH%" gen .\main.py
+"%PYARMOR_PATH%" gen --enable-jit .\main.py
 IF %ERRORLEVEL% NEQ 0 (
     echo PyArmor failed!
     pause
@@ -71,6 +71,8 @@ echo Cleaning up dist, build & PyInstaller dust files...
 rmdir /s /q dist
 rmdir /s /q build
 IF EXIST WinLock.spec del /f /q WinLock.spec
+echo.
 echo Build complete! %EXE_NAME% is ready.
-ENDLOCAL
+echo.
+pause
 exit
