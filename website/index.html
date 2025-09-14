@@ -18,6 +18,8 @@
 				--text-secondary: #a0a0a0;
 				--accent-primary: #4a9eff;
 				--accent-secondary: #6366f1;
+				--github-bg: #501daf;
+				--github-hover: #501daf;
 				--success: #10b981;
 				--border: #404040;
 				--shadow: rgba(0, 0, 0, 0.3);
@@ -170,13 +172,13 @@
 				border-radius: 6px;
 				cursor: pointer;
 				box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-				transition: background 0.2s;
+				transition: all 0.3s ease;
 				text-decoration: none;
 				margin: auto;
 			}
 
 			.github-btn:hover {
-				background: var(--github-hover);
+				scale: 1.075;
 			}
 
 			.github-btn svg {
@@ -411,9 +413,10 @@
 					<p>Bloquea tu pantalla con contraseña sin cerrar las aplicaciones cuando te alejes. Seguro, ligero y completamente gratuito.</p>
 					<button class="download-btn" id="downloadBtn" disabled>
 						<i class="fas fa-spinner fa-spin"></i>
-						Cargando versión...
+						<span class="btn-text">Cargando versión...</span>
 						<div class="file-info" id="fileInfo">Cargando información del archivo...</div>
 					</button>
+
 					<button class="github-btn" onclick="window.open('https://github.com/enderhacker/WinLock', '_blank')">
 						<svg viewBox="0 0 16 16" version="1.1" aria-hidden="true">
 							<path
@@ -534,9 +537,20 @@
 
 			const downloadBtn = document.getElementById("downloadBtn");
 			const fileInfoDiv = document.getElementById("fileInfo");
+			const btnTextSpan = downloadBtn.querySelector(".btn-text"); // <span> para el texto del botón
 			const repoOwner = "enderhacker";
 			const repoName = "WinLock";
-			const assetFileName = "WinLock.exe"; // Nombre del archivo a descargar
+			const assetFileName = "WinLock.exe";
+
+			// Formateador de tamaño (si quieres usar bytes reales)
+			function formatBytes(bytes, decimals = 2) {
+				if (bytes === 0) return "0 Bytes";
+				const k = 1024;
+				const dm = decimals < 0 ? 0 : decimals;
+				const sizes = ["Bytes", "KB", "MB", "GB"];
+				const i = Math.floor(Math.log(bytes) / Math.log(k));
+				return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
+			}
 
 			async function fetchLatestRelease() {
 				const apiUrl = "https://raw.githubusercontent.com/enderhacker/WinLock/main/version.json";
@@ -551,16 +565,14 @@
 					const fileSizeString = release.size;
 
 					if (downloadUrl) {
-						// Mantener el icono y actualizar solo el texto
+						// Cambiar icono y texto
 						downloadBtn.querySelector("i").className = "fas fa-download";
-						downloadBtn.childNodes[1].textContent = ` Descargar ${assetFileName} ${latestVersion}`;
+						btnTextSpan.textContent = ` Descargar ${assetFileName} ${latestVersion}`;
 						downloadBtn.disabled = false;
 						downloadBtn.setAttribute("data-download-url", downloadUrl);
 
-						// Actualizar info del archivo
 						fileInfoDiv.textContent = `${fileSizeString} • Windows`;
 
-						// Actualizar el card de "Ligero y Rápido"
 						document.querySelectorAll(".feature-card").forEach((card) => {
 							if (card.querySelector("h3")?.textContent === "Ligero y Rápido") {
 								const sizeParagraph = card.querySelector("p");
@@ -569,38 +581,31 @@
 								}
 							}
 						});
-
-						console.log(`Latest release: ${latestVersion}`);
-						console.log(`Download URL: ${downloadUrl}`);
-						console.log(`File size: ${fileSizeString}`);
 					} else {
 						fileInfoDiv.textContent = "Error: No se encontró el enlace de descarga.";
 						downloadBtn.querySelector("i").className = "fas fa-exclamation-triangle";
-						downloadBtn.childNodes[1].textContent = " Descarga no disponible";
+						btnTextSpan.textContent = " Descarga no disponible";
 						downloadBtn.disabled = true;
 					}
 				} catch (error) {
 					console.error("Error fetching version.json:", error);
 					fileInfoDiv.textContent = "Error al cargar la información del archivo. Por favor, inténtelo más tarde.";
 					downloadBtn.querySelector("i").className = "fas fa-exclamation-triangle";
-					downloadBtn.childNodes[1].textContent = " Error de descarga";
+					btnTextSpan.textContent = " Error de descarga";
 					downloadBtn.disabled = true;
 				}
 			}
 
-			// Inicial fetch al cargar la página
+			// Inicial fetch
 			fetchLatestRelease();
 
-			// Click handler del botón
+			// Click handler
 			downloadBtn.addEventListener("click", function (e) {
 				e.preventDefault();
-
-				// Animación feedback
 				this.style.transform = "scale(0.95)";
 				setTimeout(() => (this.style.transform = "scale(1)"), 150);
 
 				const downloadUrl = this.getAttribute("data-download-url");
-
 				if (downloadUrl) {
 					const a = document.createElement("a");
 					a.href = downloadUrl;
@@ -610,7 +615,6 @@
 					document.body.removeChild(a);
 					console.log(`WinLock download initiated from ${downloadUrl}`);
 				} else {
-					console.error("Download URL not available.");
 					alert("La URL de descarga no está disponible. Por favor, inténtelo más tarde.");
 				}
 			});
