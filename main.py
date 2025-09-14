@@ -6,6 +6,7 @@ try:
     import time
     import ctypes
     import ctypes.wintypes
+    import keyboard
     import os
     import sys
     import threading
@@ -24,7 +25,7 @@ except ImportError:
 # --- CONFIGURACIÓN DEL SISTEMA DE LOGS ---
 
 LOG_FOLDER_NAME = "WinLock"
-LOG_FILE_NAME = "logs.txt"
+LOG_FILE_NAME = f"logs-{datetime.now().strftime('%d_%m_%Y-%H_%M_%S')}.txt"
 
 
 def get_log_path():
@@ -327,33 +328,71 @@ class WinLock:
             write_log(f"FALLO al restaurar el cursor: {e}")
 
     def create_lock_screen(self):
-        """Crea la ventana de la pantalla de bloqueo de alta seguridad."""
-        write_log("Iniciando la creación de la pantalla de bloqueo.")
+        """
+        Crea una ventana de pantalla de bloqueo de alta seguridad con un hook de teclado
+        global que captura y suprime todas las teclas para máxima robustez.
+        """
+        write_log("Iniciando la creación de la pantalla de bloqueo de alta seguridad.")
         user32 = ctypes.windll.user32
+
+        # --- Constantes para el estado de las teclas ---
+        VK_CAPITAL = 0x14  # Caps Lock
 
         self._hide_system_cursor()
         lock_window = tk.Toplevel(self.root)
-        try:
-            lock_window.iconbitmap(resource_path("winlock.ico"))
-        except Exception as e:
-            write_log(
-                f"ADVERTENCIA: No se pudo cargar el icono 'winlock.ico' para la ventana de bloqueo: {e}"
-            )
+
+        # Lista de teclas que no producen caracteres y deben ser ignoradas.
+        NON_PRINTABLE_KEYS = [
+            "shift",
+            "right shift",
+            "ctrl",
+            "right ctrl",
+            "alt",
+            "right alt",
+            "caps lock",
+            "esc",
+            "tab",
+            "home",
+            "end",
+            "insert",
+            "delete",
+            "page up",
+            "page down",
+            "print screen",
+            "scroll lock",
+            "pause",
+            "f1",
+            "f2",
+            "f3",
+            "f4",
+            "f5",
+            "f6",
+            "f7",
+            "f8",
+            "f9",
+            "f10",
+            "f11",
+            "f12",
+            "up",
+            "down",
+            "left",
+            "right",
+            "num lock",
+            "apps",
+            "left windows",
+            "right windows",
+        ]
 
         try:
             # --- Configuración de ventana ---
             lock_window.title("WinLock - Bloqueado")
             lock_window.attributes("-fullscreen", True)
-            write_log("Atributo '-fullscreen' establecido en True.")
             lock_window.attributes("-topmost", True)
-            write_log("Atributo '-topmost' establecido en True.")
             lock_window.config(cursor="none", bg="#1c1c1c")
             lock_window.overrideredirect(True)
             lock_window.protocol("WM_DELETE_WINDOW", lambda: None)
-
-            # Capturar todo el input del ratón y teclado para esta ventana
             lock_window.grab_set()
-            write_log("Input grab_set() activado. Los clicks no deberían pasar.")
+            write_log("Ventana configurada y grab_set() activado.")
 
             # --- Contenido UI ---
             tk.Label(
@@ -377,42 +416,22 @@ class WinLock:
             duration_label.pack(pady=10)
 
             def update_time_and_duration():
+                if not lock_window.winfo_exists():
+                    return
                 time_label.config(text=time.strftime("%H:%M"))
                 date_str = time.strftime("%A, %d de %B de %Y").capitalize()
-                replacements = {
-                    "á": "a",
-                    "Á": "A",
-                    "é": "e",
-                    "É": "E",
-                    "í": "i",
-                    "Í": "I",
-                    "ó": "o",
-                    "Ó": "O",
-                    "ú": "u",
-                    "Ú": "U",
-                    "ñ": "n",
-                    "Ñ": "N",
-                    "ç": "c",
-                    "Ç": "C",
-                }
-                for bad, good in replacements.items():
-                    date_str = date_str.replace(bad, good)
                 date_label.config(text=date_str)
-
                 delta = int(time.time() - self.lock_start_time)
-                days, rem = divmod(delta, 86400)
-                hours, rem = divmod(rem, 3600)
-                minutes, seconds = divmod(rem, 60)
-                parts = []
-                if days > 0:
-                    parts.append(f"{days}d")
-                if hours > 0:
-                    parts.append(f"{hours}h")
-                if minutes > 0:
-                    parts.append(f"{minutes}m")
-                parts.append(f"{seconds}s")
-                duration_label.config(text="Tiempo bloqueado: " + " ".join(parts))
-
+                d, r = divmod(delta, 86400)
+                h, r = divmod(r, 3600)
+                m, s = divmod(r, 60)
+                parts = (
+                    (f"{d}d " if d else "")
+                    + (f"{h}h " if h else "")
+                    + (f"{m}m " if m else "")
+                    + f"{s}s"
+                )
+                duration_label.config(text="Tiempo bloqueado: " + parts)
                 lock_window.after(1000, update_time_and_duration)
 
             update_time_and_duration()
@@ -420,18 +439,40 @@ class WinLock:
             center_frame = tk.Frame(lock_window, bg="#1c1c1c")
             center_frame.pack(expand=True)
 
-            unlock_entry = tk.Entry(
+            password_label = tk.Label(
                 center_frame,
+                text="Contraseña:",
+                font=("Segoe UI", 12),
+                fg="#cccccc",
+                bg="#1c1c1c",
+            )
+            password_label.pack(pady=(20, 5))
+
+            entry_frame = tk.Frame(
+                center_frame,
+                bg="#1c1c1c",
+                highlightthickness=1,
+                highlightbackground="#333",
+            )
+            entry_frame.pack(pady=(0, 8))
+
+            unlock_entry = tk.Entry(
+                entry_frame,
                 show="•",
                 font=("Segoe UI", 16),
-                bg="#2b2b2b",
+                bg="#1e1e1e",
                 fg="white",
                 insertbackground="white",
-                justify="center",
+                disabledbackground="#1e1e1e",
+                disabledforeground="white",
+                readonlybackground="#1e1e1e",
+                highlightthickness=0,
+                relief="flat",
                 bd=0,
                 width=25,
+                justify="center",
             )
-            unlock_entry.pack(pady=(15, 8), ipady=10)
+            unlock_entry.pack(ipady=10)
 
             status_label = tk.Label(
                 center_frame, text="", font=("Segoe UI", 11), fg="#ff3b30", bg="#1c1c1c"
@@ -456,76 +497,87 @@ class WinLock:
             ).pack()
             tk.Label(
                 bottom_frame,
-                text="Aplicación 'WinLock' creada por Jaime Muñiz García - https://winlock.labdigital.es",
+                text="Aplicación 'WinLock' - https://winlock.labdigital.es",
                 font=("Segoe UI", 10),
                 fg="#A0A0A0",
                 bg="#1c1c1c",
             ).pack(pady=(5, 0))
 
-            def check_password(event=None):
+            def check_password():
                 entered_pass = unlock_entry.get()
-                write_log(
-                    f"Intento de desbloqueo con contraseña de longitud: {len(entered_pass)}."
-                )
+                write_log(f"Intento de desbloqueo ejecutado.")
                 if entered_pass == self.unlock_password:
-                    write_log("Contraseña correcta introducida. Desbloqueando.")
+                    write_log("Contraseña correcta. Desbloqueando.")
                     lock_window.destroy()
                     self._quit_app()
                 else:
-                    write_log("Intento de desbloqueo con contraseña incorrecta.")
+                    write_log("Contraseña incorrecta.")
                     status_label.config(text="Contraseña incorrecta")
+                    unlock_entry.config(state="normal")
                     unlock_entry.delete(0, tk.END)
+                    unlock_entry.config(state="readonly")
                     status_label.after(3000, lambda: status_label.config(text=""))
 
-            lock_window.bind("<Return>", check_password)
+            def handle_key_press(event):
+                # --- LOGGING ---
+                if not lock_window.winfo_exists():
+                    write_log("Ventana no existe. Ignorando pulsación.")
+                    return
+
+                key_name = event.name.lower()
+                if status_label.cget("text"):
+                    status_label.config(text="")
+
+                unlock_entry.config(state="normal")
+
+                if key_name == "enter":
+                    check_password()
+                elif key_name == "backspace":
+                    current_text = unlock_entry.get()
+                    if current_text:
+                        unlock_entry.delete(len(current_text) - 1, tk.END)
+                elif len(key_name) == 1 and key_name not in NON_PRINTABLE_KEYS:
+                    caps_on = user32.GetKeyState(VK_CAPITAL) & 1
+                    shift_on = keyboard.is_pressed("shift") or keyboard.is_pressed(
+                        "right shift"
+                    )
+                    char = (
+                        event.name
+                    )  # Usar event.name original para preservar mayúsculas/minúsculas de símbolos
+
+                    # La librería 'keyboard' ya suele devolver el carácter correcto
+                    # (ej: Shift+'5' -> '%'). Esta lógica refina el manejo para letras.
+                    if "a" <= key_name <= "z":
+                        is_upper = (caps_on and not shift_on) or (
+                            not caps_on and shift_on
+                        )
+                        char = key_name.upper() if is_upper else key_name.lower()
+
+                    unlock_entry.insert(tk.END, char)
+
+                unlock_entry.config(state="readonly")
+
+            # --- Keyboard Hooking ---
+            keyboard.on_press(handle_key_press, suppress=True)
+            write_log("Hook de teclado global con supresión activado.")
 
             def center_cursor():
-                """Mantiene el cursor del ratón (aunque invisible) en el centro de la pantalla."""
                 try:
-                    cx, cy = (
-                        user32.GetSystemMetrics(0) // 2,
-                        user32.GetSystemMetrics(1) // 2,
-                    )
-                    user32.SetCursorPos(cx, cy)
                     if lock_window.winfo_exists():
+                        user32.SetCursorPos(
+                            user32.GetSystemMetrics(0) // 2,
+                            user32.GetSystemMetrics(1) // 2,
+                        )
                         lock_window.after(250, center_cursor)
                 except Exception:
                     pass
 
             center_cursor()
 
-            def persistent_focus():
-                """Mantiene el foco en el campo de contraseña sin falsos positivos."""
-                try:
-                    if lock_window.winfo_exists():
-                        current = lock_window.focus_get()
-                        # Solo reenfocar si realmente no está en el entry
-                        if current is None or current != unlock_entry:
-                            unlock_entry.focus_set()
-                            write_log(
-                                "Foco perdido, reenfocado en el campo de contraseña."
-                            )
-                        # volver a planificar
-                        lock_window.after(500, persistent_focus)
-                except tk.TclError:
-                    write_log("Ventana cerrada, deteniendo persistent_focus.")
-                except Exception as e:
-                    write_log(f"Error inesperado en persistent_focus: {e}")
-
-            # Dar foco inicial y empezar el bucle de enfoque persistente
-            unlock_entry.focus_force()
-            write_log("Foco inicial forzado en el campo de contraseña.")
-            persistent_focus()
-            write_log("Bucle de enfoque persistente iniciado.")
-
-            write_log(
-                "Pantalla de bloqueo creada y visible. Control de ratón y teclado activado."
-            )
+            write_log("Pantalla de bloqueo creada y visible.")
 
         except Exception as e:
-            write_log(
-                f"ERROR CRÍTICO al crear la pantalla de bloqueo: {e}. Saliendo para proteger al usuario."
-            )
+            write_log(f"ERROR CRÍTICO al crear la pantalla de bloqueo: {e}. Saliendo.")
             self._quit_app()
 
     def _quit_app(self):
@@ -550,6 +602,8 @@ class WinLock:
         except Exception as e:
             write_log(f"FALLO al restaurar estado de ejecución del hilo: {e}")
 
+        keyboard.unhook_all()
+        write_log("Todos los hooks de teclado han sido desactivados.")
         write_log("Salida de la aplicación completada. sys.exit(0).")
         sys.exit(0)
 
@@ -582,5 +636,7 @@ if __name__ == "__main__":
                 ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
             except Exception:
                 pass
+            keyboard.unhook_all()
+            write_log("Todos los hooks de teclado han sido desactivados.")
             write_log("Aplicación finalizada.\n" + "=" * 50 + "\n")
             sys.exit(0)

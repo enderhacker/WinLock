@@ -48,6 +48,7 @@ pyinstaller --onefile --windowed --name WinLock --uac-admin --icon=winlock.ico ^
 --hidden-import tkinter.ttk ^
 --hidden-import tkinter.messagebox ^
 --hidden-import locale ^
+--hidden-import keyboard ^
 --hidden-import ctypes ^
 --hidden-import ctypes.wintypes ^
 --hidden-import os ^
