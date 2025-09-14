@@ -88,7 +88,8 @@
 				padding: 5rem 0;
 				text-align: center;
 				color: var(--text-primary);
-				/* Added subtle gradient overlay for depth */
+				min-height: 70vh;
+				align-content: center;
 				background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
 			}
 
@@ -410,8 +411,8 @@
 					<button class="download-btn" id="downloadBtn" disabled>
 						<i class="fas fa-spinner fa-spin"></i>
 						Cargando versión...
+						<div class="file-info" id="fileInfo">Cargando información del archivo...</div>
 					</button>
-					<div class="file-info" id="fileInfo">Cargando información del archivo...</div>
 					<italic>Creado por Jaime Muñiz García</italic>
 					<br />
 					<button class="github-btn" onclick="window.open('https://github.com/enderhacker/WinLock', '_blank')">
@@ -553,12 +554,12 @@
 
 					if (downloadUrl) {
 						// Update button text and enable it
-						downloadBtn.innerHTML = `<i class="fas fa-download"></i> Descargar WinLock ${latestVersion}`;
+						downloadBtn.innerHTML = `<i class="fas fa-download"></i> Descargar WinLock.exe ${latestVersion}`;
 						downloadBtn.disabled = false;
 						downloadBtn.setAttribute("data-download-url", downloadUrl);
 
 						// Update file info text
-						fileInfoDiv.innerHTML = `Archivo EXE • ${fileSizeString} • Windows • Sin instalación requerida`;
+						fileInfoDiv.innerHTML = `${fileSizeString} • Windows`;
 
 						// Update the "Ligero y Rápido" feature card with the dynamic size
 						const featureCards = document.querySelectorAll(".feature-card");
