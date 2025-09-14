@@ -9,53 +9,76 @@
 		<link rel="icon" href="winlock.ico" type="image/x-icon" />
 		<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
 		<style>
-			/* Added :root color palette for dark theme */
 			:root {
-				--bg-primary: #1c1c1c;
-				--bg-secondary: #2a2a2a;
-				--bg-tertiary: #333333;
+				--bg-primary: #0a0a0a;
+				--bg-secondary: #111111;
+				--bg-tertiary: #1a1a1a;
+				--bg-card: #1e1e1e;
 				--text-primary: #ffffff;
-				--text-secondary: #a0a0a0;
-				--accent-primary: #4a9eff;
-				--accent-secondary: #6366f1;
-				--github-bg: #501daf;
-				--github-hover: #501daf;
+				--text-secondary: #a3a3a3;
+				--text-muted: #6b7280;
+				--accent-primary: #3b82f6;
+				--accent-secondary: #1d4ed8;
+				--accent-gradient: linear-gradient(135deg, #3b82f6, #1d4ed8);
 				--success: #10b981;
-				--border: #404040;
-				--shadow: rgba(0, 0, 0, 0.3);
-				--font-primary: "Segoe UI", -apple-system, BlinkMacSystemFont, "Roboto", "Helvetica Neue", Arial, sans-serif;
+				--success-hover: #059669;
+				--border: #2a2a2a;
+				--border-hover: #404040;
+				--shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+				--shadow-md: 0 8px 25px rgba(0, 0, 0, 0.4);
+				--shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.5);
+				--shadow-accent: 0 8px 32px rgba(59, 130, 246, 0.3);
+				--font-primary: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", sans-serif;
+				--radius-sm: 8px;
+				--radius-md: 12px;
+				--radius-lg: 20px;
+				--radius-xl: 24px;
 			}
 
 			* {
 				margin: 0;
 				padding: 0;
 				box-sizing: border-box;
-				transition: all 0.3s ease;
+				scroll-behavior: smooth;
 			}
 
+			*,
+			*::before,
+			*::after {
+				transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+			}
+
+			@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap");
+
 			body {
-				/* Updated to use CSS variables and dark theme */
 				font-family: var(--font-primary);
 				line-height: 1.6;
 				color: var(--text-primary);
 				background: var(--bg-primary);
 				min-height: 100vh;
 				font-weight: 400;
+				overflow-x: hidden;
+				scroll-behavior: smooth;
 			}
 
 			.container {
 				max-width: 1200px;
 				margin: 0 auto;
-				padding: 0 20px;
+				padding: 0 1.5rem;
+			}
+
+			@media (max-width: 768px) {
+				.container {
+					padding: 0 1rem;
+				}
 			}
 
 			header {
-				/* Updated header for dark theme with subtle border */
-				background: rgba(42, 42, 42, 0.95);
+				background: rgba(17, 17, 17, 0.8);
 				backdrop-filter: blur(20px);
 				-webkit-backdrop-filter: blur(20px);
-				padding: 1.2rem 0;
-				box-shadow: 0 4px 30px var(--shadow);
+				padding: 1rem 0;
+				box-shadow: var(--shadow-sm);
 				border-bottom: 1px solid var(--border);
 				position: sticky;
 				top: 0;
@@ -66,83 +89,176 @@
 				display: flex;
 				align-items: center;
 				justify-content: space-between;
+				gap: 1rem;
 			}
 
 			.logo {
 				display: flex;
 				align-items: center;
-				font-size: 1.9rem;
+				font-size: 1.75rem;
 				font-weight: 700;
 				color: var(--text-primary);
-				letter-spacing: -0.02em;
+				letter-spacing: -0.025em;
 			}
 
 			.logo img {
-				width: 48px;
-				height: 48px;
-				min-width: 48px;
-				min-height: 48px;
+				width: 40px;
+				height: 40px;
+				min-width: 40px;
+				min-height: 40px;
 				object-fit: contain;
-				margin-right: 12px;
+				margin-right: 0.75rem;
+				border-radius: var(--radius-sm);
+			}
+
+			.header-btn {
+				background: var(--accent-gradient);
+				color: var(--text-primary);
+				border: 1px solid var(--border-hover);
+				padding: 0.75rem 1.5rem;
+				border-radius: var(--radius-md);
+				cursor: pointer;
+				font-family: var(--font-primary);
+				font-weight: 500;
+				font-size: 0.9rem;
+				transition: all 0.3s ease;
+				text-decoration: none;
+				display: inline-flex;
+				align-items: center;
+				gap: 0.5rem;
+			}
+
+			.header-btn:hover {
+				transform: translateY(-2px);
+				box-shadow: var(--shadow-accent);
+				border-color: var(--accent-primary);
 			}
 
 			.hero {
-				padding: 5rem 0;
+				padding: 6rem 0;
 				text-align: center;
 				color: var(--text-primary);
-				min-height: 70vh;
-				align-content: center;
-				background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+				min-height: 80vh;
+				display: flex;
+				align-items: center;
+				background: radial-gradient(ellipse at center, rgba(59, 130, 246, 0.1) 0%, var(--bg-primary) 70%);
+				position: relative;
+				overflow: hidden;
+				transition: none;
+			}
+
+			.hero::before {
+				content: "";
+				position: absolute;
+				top: 0;
+				left: 0;
+				right: 0;
+				bottom: 0;
+				background: radial-gradient(circle at 20% 80%, rgba(59, 130, 246, 0.1) 0%, transparent 50%), radial-gradient(circle at 80% 20%, rgba(29, 78, 216, 0.1) 0%, transparent 50%);
+				animation: float 20s ease-in-out infinite;
+			}
+
+			@keyframes float {
+				0%,
+				100% {
+					transform: translateY(0px) rotate(0deg);
+				}
+				50% {
+					transform: translateY(-20px) rotate(1deg);
+				}
+			}
+
+			.hero-content {
+				position: relative;
+				z-index: 2;
+			}
+
+			.hero-actions {
+				display: flex;
+				justify-content: center;
+				gap: 10px;
+				flex-wrap: wrap;
 			}
 
 			.hero h1 {
-				font-size: 3.5rem;
+				font-size: clamp(2.5rem, 5vw, 4rem);
 				font-weight: 800;
 				margin-bottom: 1.5rem;
-				text-shadow: 0 4px 20px var(--shadow);
-				letter-spacing: -0.02em;
+				text-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+				letter-spacing: -0.025em;
 				line-height: 1.1;
 				color: var(--text-primary);
+				background: linear-gradient(135deg, var(--text-primary), var(--text-secondary));
+				-webkit-background-clip: text;
+				-webkit-text-fill-color: transparent;
+				background-clip: text;
 			}
 
 			.hero p {
-				font-size: 1.4rem;
+				font-size: clamp(1.1rem, 2.5vw, 1.4rem);
 				font-weight: 300;
 				margin-bottom: 3rem;
 				color: var(--text-secondary);
 				max-width: 650px;
 				margin-left: auto;
 				margin-right: auto;
-				line-height: 1.5;
+				line-height: 1.6;
 			}
 
 			.download-btn {
-				/* Updated button styling for dark theme */
 				display: inline-flex;
+				flex-direction: column;
 				align-items: center;
-				gap: 12px;
-				background: linear-gradient(135deg, var(--success), #059669);
+				background: linear-gradient(135deg, var(--success), var(--success-hover));
 				color: white;
-				padding: 1.2rem 3rem;
-				font-size: 1.3rem;
+				padding: 0.75rem 1rem;
+				font-size: 1.2rem;
 				font-weight: 600;
 				text-decoration: none;
-				border-radius: 60px;
+				border-radius: var(--radius-xl);
 				box-shadow: 0 10px 40px rgba(16, 185, 129, 0.3);
-				transition: all 0.3s ease;
-				margin-bottom: 1.5rem;
+				transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 				border: 2px solid rgba(255, 255, 255, 0.1);
 				cursor: pointer;
+				position: relative;
+				overflow: hidden;
+			}
+
+			.download-btn::before {
+				content: "";
+				position: absolute;
+				top: 0;
+				left: -100%;
+				width: 100%;
+				height: 100%;
+				background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+				transition: left 0.5s;
+			}
+
+			.download-btn:hover::before {
+				left: 100%;
 			}
 
 			.download-btn:hover:not([disabled]) {
-				transform: translateY(-3px) scale(1.02);
-				box-shadow: 0 15px 50px rgba(16, 185, 129, 0.4);
-				background: linear-gradient(135deg, #059669, #047857);
+				transform: translateY(-4px) scale(1.02);
+				box-shadow: 0 20px 60px rgba(16, 185, 129, 0.4);
+				background: linear-gradient(135deg, var(--success-hover), #047857);
+			}
+
+			.download-btn:active {
+				transform: translateY(-2px) scale(0.98);
+			}
+
+			.download-btn-content {
+				display: flex;
+				align-items: center;
+				gap: 0.75rem;
+				position: relative;
+				z-index: 2;
 			}
 
 			.download-btn i {
-				font-size: 1.4rem;
+				font-size: 1.3rem;
 			}
 
 			.download-btn[disabled] {
@@ -153,32 +269,34 @@
 			}
 
 			.file-info {
-				font-size: 1rem;
-				color: var(--text-secondary);
-				margin-top: 1rem;
-				font-weight: 300;
+				font-size: 0.9rem;
+				color: #ffffffbb;
+				margin-top: 0.5rem;
+				font-weight: 400;
 			}
 
 			.github-btn {
-				display: flex;
+				display: inline-flex;
 				align-items: center;
-				gap: 8px;
-				background: var(--github-bg);
+				gap: 0.75rem;
+				background: var(--bg-card);
 				color: var(--text-primary);
-				border: none;
-				padding: 12px 20px;
-				font-size: 16px;
-				font-weight: 600;
-				border-radius: 6px;
+				border: 1px solid var(--border);
+				padding: 1rem 1.5rem;
+				font-size: 1rem;
+				font-weight: 500;
+				border-radius: var(--radius-md);
 				cursor: pointer;
-				box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+				box-shadow: var(--shadow-sm);
 				transition: all 0.3s ease;
 				text-decoration: none;
-				margin: auto;
 			}
 
 			.github-btn:hover {
-				scale: 1.075;
+				transform: translateY(-2px);
+				box-shadow: var(--shadow-md);
+				border-color: var(--border-hover);
+				background: var(--bg-tertiary);
 			}
 
 			.github-btn svg {
@@ -188,48 +306,83 @@
 			}
 
 			.features {
-				/* Updated features section for dark theme */
 				background: var(--bg-secondary);
-				padding: 5rem 0;
+				padding: 6rem 0;
+				position: relative;
 			}
 
 			.features-grid {
 				display: grid;
 				grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-				gap: 2.5rem;
-				margin-top: 3rem;
+				gap: 2rem;
+				margin-top: 4rem;
 			}
 
 			.feature-card {
-				/* Updated cards for dark theme with subtle borders */
-				background: var(--bg-tertiary);
+				background: rgba(30, 30, 30, 0.8);
+				backdrop-filter: blur(10px);
+				-webkit-backdrop-filter: blur(10px);
 				padding: 2.5rem;
-				border-radius: 20px;
+				border-radius: var(--radius-lg);
 				text-align: center;
 				border: 1px solid var(--border);
 				transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-				box-shadow: 0 4px 25px var(--shadow);
+				box-shadow: var(--shadow-sm);
+				position: relative;
+				overflow: hidden;
+			}
+
+			.feature-card::before {
+				content: "";
+				position: absolute;
+				top: 0;
+				left: 0;
+				right: 0;
+				height: 2px;
+				background: var(--accent-gradient);
+				transform: scaleX(0);
+				transition: transform 0.3s ease;
 			}
 
 			.feature-card:hover {
 				transform: translateY(-8px);
-				box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+				box-shadow: var(--shadow-lg);
 				border-color: var(--accent-primary);
+				background: rgba(30, 30, 30, 0.9);
+			}
+
+			.feature-card:hover::before {
+				transform: scaleX(1);
 			}
 
 			.feature-icon {
-				/* Updated icon styling with new color scheme */
 				width: 70px;
 				height: 70px;
-				background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-				border-radius: 20px;
+				background: var(--accent-gradient);
+				border-radius: var(--radius-lg);
 				display: flex;
 				align-items: center;
 				justify-content: center;
 				margin: 0 auto 1.5rem;
 				color: white;
 				font-size: 28px;
-				box-shadow: 0 8px 25px rgba(74, 158, 255, 0.3);
+				box-shadow: var(--shadow-accent);
+				position: relative;
+			}
+
+			.feature-icon::after {
+				content: "";
+				position: absolute;
+				inset: -2px;
+				background: var(--accent-gradient);
+				border-radius: var(--radius-lg);
+				z-index: -1;
+				opacity: 0;
+				transition: opacity 0.3s ease;
+			}
+
+			.feature-card:hover .feature-icon::after {
+				opacity: 0.3;
 			}
 
 			.feature-card h3 {
@@ -247,36 +400,54 @@
 			}
 
 			.how-it-works {
-				/* Updated section for dark theme */
 				background: var(--bg-primary);
-				padding: 5rem 0;
+				padding: 6rem 0;
 			}
 
 			.steps {
 				display: grid;
-				grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+				grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
 				gap: 3rem;
-				margin-top: 3rem;
+				margin-top: 4rem;
 			}
 
 			.step {
 				text-align: center;
+				position: relative;
 			}
 
 			.step-number {
-				/* Updated step numbers with new color scheme */
-				width: 60px;
-				height: 60px;
-				background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+				width: 70px;
+				height: 70px;
+				background: var(--accent-gradient);
 				color: white;
 				border-radius: 50%;
 				display: flex;
 				align-items: center;
 				justify-content: center;
 				font-weight: 700;
-				font-size: 1.4rem;
+				font-size: 1.5rem;
 				margin: 0 auto 1.5rem;
-				box-shadow: 0 8px 25px rgba(74, 158, 255, 0.3);
+				box-shadow: var(--shadow-accent);
+				position: relative;
+				z-index: 2;
+			}
+
+			.step-number::before {
+				content: "";
+				position: absolute;
+				inset: -4px;
+				background: var(--accent-gradient);
+				border-radius: 50%;
+				z-index: -1;
+				opacity: 0;
+				transform: scale(0.8);
+				transition: all 0.3s ease;
+			}
+
+			.step:hover .step-number::before {
+				opacity: 0.3;
+				transform: scale(1);
 			}
 
 			.step h3 {
@@ -293,11 +464,11 @@
 
 			.section-title {
 				text-align: center;
-				font-size: 2.8rem;
+				font-size: clamp(2rem, 4vw, 3rem);
 				font-weight: 700;
 				color: var(--text-primary);
 				margin-bottom: 1rem;
-				letter-spacing: -0.02em;
+				letter-spacing: -0.025em;
 			}
 
 			.section-subtitle {
@@ -311,65 +482,13 @@
 			}
 
 			footer {
-				/* Updated footer for dark theme */
-				background: linear-gradient(135deg, #0f0f0f, var(--bg-secondary));
+				background: linear-gradient(135deg, var(--bg-secondary), var(--bg-tertiary));
 				color: var(--text-secondary);
 				text-align: center;
 				padding: 3rem 0;
 				border-top: 1px solid var(--border);
 			}
 
-			.security-badge {
-				display: inline-flex;
-				align-items: center;
-				gap: 8px;
-				background: rgba(255, 255, 255, 0.05);
-				backdrop-filter: blur(10px);
-				padding: 0.7rem 1.2rem;
-				border-radius: 30px;
-				margin: 0 0.5rem;
-				font-size: 0.9rem;
-				font-weight: 500;
-				border: 1px solid var(--border);
-				color: var(--text-secondary);
-			}
-
-			@media (max-width: 768px) {
-				.hero h1 {
-					font-size: 2.5rem;
-				}
-
-				.hero p {
-					font-size: 1.2rem;
-				}
-
-				.header-content {
-					flex-direction: column;
-					gap: 1rem;
-				}
-
-				.download-btn {
-					padding: 1rem 2rem;
-					font-size: 1.1rem;
-				}
-
-				.features-grid {
-					grid-template-columns: 1fr;
-					gap: 2rem;
-				}
-			}
-
-			html {
-				scroll-behavior: smooth;
-			}
-
-			.download-btn:focus,
-			.feature-card:focus {
-				outline: 3px solid rgba(74, 158, 255, 0.5);
-				outline-offset: 2px;
-			}
-
-			/* Added smooth scrollbar styling for dark theme */
 			::-webkit-scrollbar {
 				width: 8px;
 			}
@@ -384,7 +503,102 @@
 			}
 
 			::-webkit-scrollbar-thumb:hover {
-				background: var(--text-secondary);
+				background: var(--border-hover);
+			}
+
+			@media (max-width: 768px) {
+				.hero {
+					padding: 4rem 0;
+					min-height: 70vh;
+				}
+
+				.hero h1 {
+					font-size: 2.5rem;
+				}
+
+				.hero p {
+					font-size: 1.1rem;
+				}
+
+				.header-content {
+					flex-direction: column;
+					gap: 1rem;
+				}
+
+				.download-btn {
+					font-size: 1.1rem;
+				}
+
+				.features-grid {
+					grid-template-columns: 1fr;
+					gap: 1.5rem;
+				}
+
+				.steps {
+					grid-template-columns: 1fr;
+					gap: 2rem;
+				}
+
+				.features,
+				.how-it-works {
+					padding: 4rem 0;
+				}
+			}
+
+			@media (max-width: 480px) {
+				.feature-card,
+				.step {
+					padding: 2rem 1.5rem;
+				}
+
+				.logo {
+					font-size: 1.5rem;
+				}
+
+				.logo img {
+					width: 32px;
+					height: 32px;
+					min-width: 32px;
+					min-height: 32px;
+				}
+			}
+
+			.download-btn:focus,
+			.github-btn:focus,
+			.header-btn:focus,
+			.feature-card:focus {
+				outline: 3px solid rgba(59, 130, 246, 0.5);
+				outline-offset: 2px;
+			}
+
+			.animate-in {
+				opacity: 0;
+				transform: translateY(30px);
+				transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+			}
+
+			.animate-in.visible {
+				opacity: 1;
+				transform: translateY(0);
+			}
+
+			.animate-in:nth-child(1) {
+				transition-delay: 0.1s;
+			}
+			.animate-in:nth-child(2) {
+				transition-delay: 0.2s;
+			}
+			.animate-in:nth-child(3) {
+				transition-delay: 0.3s;
+			}
+			.animate-in:nth-child(4) {
+				transition-delay: 0.4s;
+			}
+			.animate-in:nth-child(5) {
+				transition-delay: 0.5s;
+			}
+			.animate-in:nth-child(6) {
+				transition-delay: 0.6s;
 			}
 		</style>
 	</head>
@@ -396,12 +610,10 @@
 						<img src="./winlock.ico" alt="WinLock icon" />
 						WinLock
 					</div>
-					<button
-						style="background-color: var(--accent-primary); color: var(--text-primary); border: 1px solid var(--border); padding: 8px 16px; border-radius: 6px; cursor: pointer; font-family: var(--font-primary); transition: 0.3s all ease"
-						onclick="window.open('https://labdigital.es', '_blank')"
-					>
+					<a href="https://labdigital.es" target="_blank" class="header-btn">
+						<i class="fas fa-external-link-alt"></i>
 						LabDigital
-					</button>
+					</a>
 				</div>
 			</div>
 		</header>
@@ -409,24 +621,30 @@
 		<main>
 			<section class="hero">
 				<div class="container">
-					<h1>Protege tu ordenador</h1>
-					<p>Bloquea tu pantalla con contraseña sin cerrar las aplicaciones cuando te alejes. Seguro, ligero y completamente gratuito.</p>
-					<button class="download-btn" id="downloadBtn" disabled>
-						<i class="fas fa-spinner fa-spin"></i>
-						<span class="btn-text">Cargando versión...</span>
-						<div class="file-info" id="fileInfo">Cargando información del archivo...</div>
-					</button>
+					<div class="hero-content">
+						<h1>Protege tu ordenador</h1>
+						<p>Bloquea tu pantalla con contraseña sin cerrar las aplicaciones cuando te alejes. Seguro, ligero y completamente gratuito.</p>
+						<div class="hero-actions">
+							<button class="download-btn" id="downloadBtn" disabled>
+								<div class="download-btn-content">
+									<i class="fas fa-spinner fa-spin"></i>
+									<span class="btn-text">Cargando versión...</span>
+								</div>
+								<div class="file-info" id="fileInfo">Cargando información del archivo...</div>
+							</button>
 
-					<button class="github-btn" onclick="window.open('https://github.com/enderhacker/WinLock', '_blank')">
-						<svg viewBox="0 0 16 16" version="1.1" aria-hidden="true">
-							<path
-								fill-rule="evenodd"
-								d="M8 0C3.58 0 0 3.58 0 8a8 8 0 005.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2 .37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.13 0 0 .67-.22 2.2.82a7.65 7.65 0 012-.27c.68.003 1.36.092 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.11.16 1.93.08 2.13.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8 8 0 0016 8c0-4.42-3.58-8-8-8z"
-							></path>
-						</svg>
-						Ver en GitHub
-					</button>
-					<italic>Creado por Jaime Muñiz García</italic>
+							<a href="https://github.com/enderhacker/WinLock" target="_blank" class="github-btn">
+								<svg viewBox="0 0 16 16" version="1.1" aria-hidden="true">
+									<path
+										fill-rule="evenodd"
+										d="M8 0C3.58 0 0 3.58 0 8a8 8 0 005.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2 .37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.13 0 0 .67-.22 2.2.82a7.65 7.65 0 012-.27c.68.003 1.36.092 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.11.16 1.93.08 2.13.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8 8 0 0016 8c0-4.42-3.58-8-8-8z"
+									></path>
+								</svg>
+								Ver en GitHub
+							</a>
+						</div>
+						<div style="margin-top: 1rem; font-style: italic; color: var(--text-muted)">Creado por Jaime Muñiz García</div>
+					</div>
 				</div>
 			</section>
 
@@ -436,7 +654,7 @@
 					<p class="section-subtitle">Una solución simple y efectiva para proteger tu privacidad</p>
 
 					<div class="features-grid">
-						<div class="feature-card">
+						<div class="feature-card animate-in">
 							<div class="feature-icon">
 								<i class="fas fa-rocket"></i>
 							</div>
@@ -444,7 +662,7 @@
 							<p>Ejecuta directamente el archivo .exe. No requiere instalación, registro ni configuración compleja.</p>
 						</div>
 
-						<div class="feature-card">
+						<div class="feature-card animate-in">
 							<div class="feature-icon">
 								<i class="fas fa-shield-alt"></i>
 							</div>
@@ -452,7 +670,7 @@
 							<p>Bloquea toda la pantalla y deshabilita el mouse. Solo se desbloquea con la contraseña correcta.</p>
 						</div>
 
-						<div class="feature-card">
+						<div class="feature-card animate-in">
 							<div class="feature-icon">
 								<i class="fas fa-gift"></i>
 							</div>
@@ -460,16 +678,15 @@
 							<p>Sin pagos, sin suscripciones, sin anuncios. Una herramienta gratuita para siempre.</p>
 						</div>
 
-						<div class="feature-card">
+						<div class="feature-card animate-in">
 							<div class="feature-icon">
 								<i class="fas fa-bolt"></i>
 							</div>
 							<h3>Ligero y Rápido</h3>
-							<!-- This paragraph will be updated dynamically with the actual file size -->
-							<p>Cargando tamaño del archivo...</p>
+							<p id="sizeFeature">Cargando tamaño del archivo...</p>
 						</div>
 
-						<div class="feature-card">
+						<div class="feature-card animate-in">
 							<div class="feature-icon">
 								<i class="fas fa-lock"></i>
 							</div>
@@ -477,7 +694,7 @@
 							<p>Tu computadora permanece exactamente igual después del desbloqueo. Sin cambios en el sistema.</p>
 						</div>
 
-						<div class="feature-card">
+						<div class="feature-card animate-in">
 							<div class="feature-icon">
 								<i class="fas fa-mouse-pointer"></i>
 							</div>
@@ -494,19 +711,19 @@
 					<p class="section-subtitle">En solo 3 pasos simples</p>
 
 					<div class="steps">
-						<div class="step">
+						<div class="step animate-in">
 							<div class="step-number">1</div>
 							<h3>Descarga y Ejecuta</h3>
 							<p>Descarga WinLock.exe y ejecútalo directamente. No necesita instalación.</p>
 						</div>
 
-						<div class="step">
+						<div class="step animate-in">
 							<div class="step-number">2</div>
 							<h3>Configura tu Contraseña</h3>
 							<p>Establece una contraseña segura que usarás para desbloquear tu pantalla.</p>
 						</div>
 
-						<div class="step">
+						<div class="step animate-in">
 							<div class="step-number">3</div>
 							<h3>Bloquea tu Pantalla</h3>
 							<p>Haz clic en bloquear cuando te alejes. Para desbloquear, ingresa tu contraseña y presiona Enter.</p>
@@ -525,7 +742,6 @@
 		<script>
 			document.getElementById("year").textContent = new Date().getFullYear();
 
-			// Helper function to format bytes into human-readable format
 			function formatBytes(bytes, decimals = 2) {
 				if (bytes === 0) return "0 Bytes";
 				const k = 1024;
@@ -537,20 +753,10 @@
 
 			const downloadBtn = document.getElementById("downloadBtn");
 			const fileInfoDiv = document.getElementById("fileInfo");
-			const btnTextSpan = downloadBtn.querySelector(".btn-text"); // <span> para el texto del botón
+			const btnTextSpan = downloadBtn.querySelector(".btn-text");
 			const repoOwner = "enderhacker";
 			const repoName = "WinLock";
 			const assetFileName = "WinLock.exe";
-
-			// Formateador de tamaño (si quieres usar bytes reales)
-			function formatBytes(bytes, decimals = 2) {
-				if (bytes === 0) return "0 Bytes";
-				const k = 1024;
-				const dm = decimals < 0 ? 0 : decimals;
-				const sizes = ["Bytes", "KB", "MB", "GB"];
-				const i = Math.floor(Math.log(bytes) / Math.log(k));
-				return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
-			}
 
 			async function fetchLatestRelease() {
 				const apiUrl = "https://raw.githubusercontent.com/enderhacker/WinLock/main/version.json";
@@ -565,45 +771,39 @@
 					const fileSizeString = release.size;
 
 					if (downloadUrl) {
-						// Cambiar icono y texto
 						downloadBtn.querySelector("i").className = "fas fa-download";
-						btnTextSpan.textContent = ` Descargar ${assetFileName} ${latestVersion}`;
+						btnTextSpan.textContent = `Descargar ${assetFileName} ${latestVersion}`;
 						downloadBtn.disabled = false;
 						downloadBtn.setAttribute("data-download-url", downloadUrl);
 
 						fileInfoDiv.textContent = `${fileSizeString} • Windows`;
 
-						document.querySelectorAll(".feature-card").forEach((card) => {
-							if (card.querySelector("h3")?.textContent === "Ligero y Rápido") {
-								const sizeParagraph = card.querySelector("p");
-								if (sizeParagraph) {
-									sizeParagraph.textContent = `Solo ${fileSizeString}. No consume recursos del sistema y funciona instantáneamente.`;
-								}
-							}
-						});
+						const sizeFeature = document.getElementById("sizeFeature");
+						if (sizeFeature) {
+							sizeFeature.textContent = `Solo ${fileSizeString}. No consume recursos del sistema y funciona instantáneamente.`;
+						}
 					} else {
 						fileInfoDiv.textContent = "Error: No se encontró el enlace de descarga.";
 						downloadBtn.querySelector("i").className = "fas fa-exclamation-triangle";
-						btnTextSpan.textContent = " Descarga no disponible";
+						btnTextSpan.textContent = "Descarga no disponible";
 						downloadBtn.disabled = true;
 					}
 				} catch (error) {
 					console.error("Error fetching version.json:", error);
 					fileInfoDiv.textContent = "Error al cargar la información del archivo. Por favor, inténtelo más tarde.";
 					downloadBtn.querySelector("i").className = "fas fa-exclamation-triangle";
-					btnTextSpan.textContent = " Error de descarga";
+					btnTextSpan.textContent = "Error de descarga";
 					downloadBtn.disabled = true;
 				}
 			}
 
-			// Inicial fetch
 			fetchLatestRelease();
 
-			// Click handler
 			downloadBtn.addEventListener("click", function (e) {
 				e.preventDefault();
+
 				this.style.transform = "scale(0.95)";
-				setTimeout(() => (this.style.transform = "scale(1)"), 150);
+				setTimeout(() => (this.style.transform = ""), 150);
 
 				const downloadUrl = this.getAttribute("data-download-url");
 				if (downloadUrl) {
@@ -619,7 +819,24 @@
 				}
 			});
 
-			// Add smooth scrolling for any internal links
+			const observerOptions = {
+				threshold: 0.1,
+				rootMargin: "0px 0px -50px 0px",
+			};
+
+			const observer = new IntersectionObserver((entries) => {
+				entries.forEach((entry) => {
+					if (entry.isIntersecting) {
+						entry.target.classList.add("visible");
+						observer.unobserve(entry.target);
+					}
+				});
+			}, observerOptions);
+
+			document.querySelectorAll(".animate-in").forEach((el) => {
+				observer.observe(el);
+			});
+
 			document.querySelectorAll('a[href^="#"]').forEach((anchor) => {
 				anchor.addEventListener("click", function (e) {
 					e.preventDefault();
@@ -633,27 +850,16 @@
 				});
 			});
 
-			// Add entrance animations
-			const observerOptions = {
-				threshold: 0.1,
-				rootMargin: "0px 0px -50px 0px",
-			};
+			window.addEventListener("scroll", () => {
+				const scrolled = window.pageYOffset;
+				const hero = document.querySelector(".hero");
+				if (hero) {
+					hero.style.transform = `translateY(${scrolled * 0.5}px)`;
+				}
+			});
 
-			const observer = new IntersectionObserver((entries) => {
-				entries.forEach((entry) => {
-					if (entry.isIntersecting) {
-						entry.target.style.opacity = "1";
-						entry.target.style.transform = "translateY(0)";
-					}
-				});
-			}, observerOptions);
-
-			// Observe feature cards and steps for animation
-			document.querySelectorAll(".feature-card, .step").forEach((el) => {
-				el.style.opacity = "0";
-				el.style.transform = "translateY(20px)";
-				el.style.transition = "opacity 0.6s ease, transform 0.6s ease";
-				observer.observe(el);
+			window.addEventListener("load", () => {
+				document.body.style.opacity = "1";
 			});
 		</script>
 	</body>
