@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="es">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>WinLock - Bloquea tu Pantalla con Contraseña</title>
+		<meta name="author" content="Jaime Muñiz Garcia" />
+		<meta name="description" content="Bloquea tu pantalla con contraseña cuando te alejes. Seguro, ligero y completamente gratuito." />
+		<link rel="icon" href="winlock.ico" type="image/x-icon" />
+		<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+		<style>
+			/* Added :root color palette for dark theme */
+			:root {
+				--bg-primary: #1c1c1c;
+				--bg-secondary: #2a2a2a;
+				--bg-tertiary: #333333;
+				--text-primary: #ffffff;
+				--text-secondary: #a0a0a0;
+				--accent-primary: #4a9eff;
+				--accent-secondary: #6366f1;
+				--success: #10b981;
+				--border: #404040;
+				--shadow: rgba(0, 0, 0, 0.3);
+				--font-primary: "Segoe UI", -apple-system, BlinkMacSystemFont, "Roboto", "Helvetica Neue", Arial, sans-serif;
+			}
+
+			* {
+				margin: 0;
+				padding: 0;
+				box-sizing: border-box;
+				transition: all 0.3s ease;
+			}
+
+			body {
+				/* Updated to use CSS variables and dark theme */
+				font-family: var(--font-primary);
+				line-height: 1.6;
+				color: var(--text-primary);
+				background: var(--bg-primary);
+				min-height: 100vh;
+				font-weight: 400;
+			}
+
+			.container {
+				max-width: 1200px;
+				margin: 0 auto;
+				padding: 0 20px;
+			}
+
+			header {
+				/* Updated header for dark theme with subtle border */
+				background: rgba(42, 42, 42, 0.95);
+				backdrop-filter: blur(20px);
+				-webkit-backdrop-filter: blur(20px);
+				padding: 1.2rem 0;
+				box-shadow: 0 4px 30px var(--shadow);
+				border-bottom: 1px solid var(--border);
+				position: sticky;
+				top: 0;
+				z-index: 100;
+			}
+
+			.header-content {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+			}
+
+			.logo {
+				display: flex;
+				align-items: center;
+				font-size: 1.9rem;
+				font-weight: 700;
+				color: var(--text-primary);
+				letter-spacing: -0.02em;
+			}
+
+			.logo img {
+				width: 48px;
+				height: 48px;
+				min-width: 48px;
+				min-height: 48px;
+				object-fit: contain;
+				margin-right: 12px;
+			}
+
+			.hero {
+				padding: 5rem 0;
+				text-align: center;
+				color: var(--text-primary);
+				/* Added subtle gradient overlay for depth */
+				background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+			}
+
+			.hero h1 {
+				font-size: 3.5rem;
+				font-weight: 800;
+				margin-bottom: 1.5rem;
+				text-shadow: 0 4px 20px var(--shadow);
+				letter-spacing: -0.02em;
+				line-height: 1.1;
+				color: var(--text-primary);
+			}
+
+			.hero p {
+				font-size: 1.4rem;
+				font-weight: 300;
+				margin-bottom: 3rem;
+				color: var(--text-secondary);
+				max-width: 650px;
+				margin-left: auto;
+				margin-right: auto;
+				line-height: 1.5;
+			}
+
+			.download-btn {
+				/* Updated button styling for dark theme */
+				display: inline-flex;
+				align-items: center;
+				gap: 12px;
+				background: linear-gradient(135deg, var(--success), #059669);
+				color: white;
+				padding: 1.2rem 3rem;
+				font-size: 1.3rem;
+				font-weight: 600;
+				text-decoration: none;
+				border-radius: 60px;
+				box-shadow: 0 10px 40px rgba(16, 185, 129, 0.3);
+				transition: all 0.3s ease;
+				margin-bottom: 1.5rem;
+				border: 2px solid rgba(255, 255, 255, 0.1);
+				cursor: pointer;
+			}
+
+			.download-btn:hover:not([disabled]) {
+				transform: translateY(-3px) scale(1.02);
+				box-shadow: 0 15px 50px rgba(16, 185, 129, 0.4);
+				background: linear-gradient(135deg, #059669, #047857);
+			}
+
+			.download-btn i {
+				font-size: 1.4rem;
+			}
+
+			.download-btn[disabled] {
+				opacity: 0.6;
+				cursor: not-allowed;
+				box-shadow: none;
+				transform: none;
+			}
+
+			.file-info {
+				font-size: 1rem;
+				color: var(--text-secondary);
+				margin-top: 1rem;
+				font-weight: 300;
+			}
+
+			.features {
+				/* Updated features section for dark theme */
+				background: var(--bg-secondary);
+				padding: 5rem 0;
+			}
+
+			.features-grid {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+				gap: 2.5rem;
+				margin-top: 3rem;
+			}
+
+			.feature-card {
+				/* Updated cards for dark theme with subtle borders */
+				background: var(--bg-tertiary);
+				padding: 2.5rem;
+				border-radius: 20px;
+				text-align: center;
+				border: 1px solid var(--border);
+				transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+				box-shadow: 0 4px 25px var(--shadow);
+			}
+
+			.feature-card:hover {
+				transform: translateY(-8px);
+				box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+				border-color: var(--accent-primary);
+			}
+
+			.feature-icon {
+				/* Updated icon styling with new color scheme */
+				width: 70px;
+				height: 70px;
+				background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+				border-radius: 20px;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				margin: 0 auto 1.5rem;
+				color: white;
+				font-size: 28px;
+				box-shadow: 0 8px 25px rgba(74, 158, 255, 0.3);
+			}
+
+			.feature-card h3 {
+				color: var(--text-primary);
+				margin-bottom: 1rem;
+				font-size: 1.4rem;
+				font-weight: 600;
+				letter-spacing: -0.01em;
+			}
+
+			.feature-card p {
+				color: var(--text-secondary);
+				line-height: 1.7;
+				font-weight: 400;
+			}
+
+			.how-it-works {
+				/* Updated section for dark theme */
+				background: var(--bg-primary);
+				padding: 5rem 0;
+			}
+
+			.steps {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+				gap: 3rem;
+				margin-top: 3rem;
+			}
+
+			.step {
+				text-align: center;
+			}
+
+			.step-number {
+				/* Updated step numbers with new color scheme */
+				width: 60px;
+				height: 60px;
+				background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+				color: white;
+				border-radius: 50%;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				font-weight: 700;
+				font-size: 1.4rem;
+				margin: 0 auto 1.5rem;
+				box-shadow: 0 8px 25px rgba(74, 158, 255, 0.3);
+			}
+
+			.step h3 {
+				font-size: 1.3rem;
+				font-weight: 600;
+				color: var(--text-primary);
+				margin-bottom: 1rem;
+			}
+
+			.step p {
+				color: var(--text-secondary);
+				line-height: 1.7;
+			}
+
+			.section-title {
+				text-align: center;
+				font-size: 2.8rem;
+				font-weight: 700;
+				color: var(--text-primary);
+				margin-bottom: 1rem;
+				letter-spacing: -0.02em;
+			}
+
+			.section-subtitle {
+				text-align: center;
+				color: var(--text-secondary);
+				font-size: 1.2rem;
+				font-weight: 300;
+				max-width: 600px;
+				margin: 0 auto;
+				line-height: 1.6;
+			}
+
+			footer {
+				/* Updated footer for dark theme */
+				background: linear-gradient(135deg, #0f0f0f, var(--bg-secondary));
+				color: var(--text-secondary);
+				text-align: center;
+				padding: 3rem 0;
+				border-top: 1px solid var(--border);
+			}
+
+			.security-badge {
+				display: inline-flex;
+				align-items: center;
+				gap: 8px;
+				background: rgba(255, 255, 255, 0.05);
+				backdrop-filter: blur(10px);
+				padding: 0.7rem 1.2rem;
+				border-radius: 30px;
+				margin: 0 0.5rem;
+				font-size: 0.9rem;
+				font-weight: 500;
+				border: 1px solid var(--border);
+				color: var(--text-secondary);
+			}
+
+			@media (max-width: 768px) {
+				.hero h1 {
+					font-size: 2.5rem;
+				}
+
+				.hero p {
+					font-size: 1.2rem;
+				}
+
+				.header-content {
+					flex-direction: column;
+					gap: 1rem;
+				}
+
+				.download-btn {
+					padding: 1rem 2rem;
+					font-size: 1.1rem;
+				}
+
+				.features-grid {
+					grid-template-columns: 1fr;
+					gap: 2rem;
+				}
+			}
+
+			html {
+				scroll-behavior: smooth;
+			}
+
+			.download-btn:focus,
+			.feature-card:focus {
+				outline: 3px solid rgba(74, 158, 255, 0.5);
+				outline-offset: 2px;
+			}
+
+			/* Added smooth scrollbar styling for dark theme */
+			::-webkit-scrollbar {
+				width: 8px;
+			}
+
+			::-webkit-scrollbar-track {
+				background: var(--bg-primary);
+			}
+
+			::-webkit-scrollbar-thumb {
+				background: var(--border);
+				border-radius: 4px;
+			}
+
+			::-webkit-scrollbar-thumb:hover {
+				background: var(--text-secondary);
+			}
+		</style>
+	</head>
+	<body>
+		<header>
+			<div class="container">
+				<div class="header-content">
+					<div class="logo">
+						<img src="./winlock.ico" alt="WinLock icon" />
+						WinLock
+					</div>
+					<button
+						style="background-color: var(--accent-primary); color: var(--text-primary); border: 1px solid var(--border); padding: 8px 16px; border-radius: 6px; cursor: pointer; font-family: var(--font-primary); transition: 0.3s all ease"
+						onclick="window.open('https://labdigital.es', '_blank')"
+					>
+						LabDigital
+					</button>
+				</div>
+			</div>
+		</header>
+
+		<main>
+			<section class="hero">
+				<div class="container">
+					<h1>Protege tu ordenador</h1>
+					<p>Bloquea tu pantalla con contraseña sin cerrar las aplicaciones cuando te alejes. Seguro, ligero y completamente gratuito.</p>
+					<button class="download-btn" id="downloadBtn" disabled>
+						<i class="fas fa-spinner fa-spin"></i>
+						Cargando versión...
+					</button>
+					<div class="file-info" id="fileInfo">Cargando información del archivo...</div>
+					<italic>Creado por Jaime Muñiz García</italic>
+				</div>
+			</section>
+
+			<section class="features">
+				<div class="container">
+					<h2 class="section-title">¿Por qué elegir WinLock?</h2>
+					<p class="section-subtitle">Una solución simple y efectiva para proteger tu privacidad</p>
+
+					<div class="features-grid">
+						<div class="feature-card">
+							<div class="feature-icon">
+								<i class="fas fa-rocket"></i>
+							</div>
+							<h3>Sin Instalación</h3>
+							<p>Ejecuta directamente el archivo .exe. No requiere instalación, registro ni configuración compleja.</p>
+						</div>
+
+						<div class="feature-card">
+							<div class="feature-icon">
+								<i class="fas fa-shield-alt"></i>
+							</div>
+							<h3>Bloqueo Completo</h3>
+							<p>Bloquea toda la pantalla y deshabilita el mouse. Solo se desbloquea con la contraseña correcta.</p>
+						</div>
+
+						<div class="feature-card">
+							<div class="feature-icon">
+								<i class="fas fa-gift"></i>
+							</div>
+							<h3>Completamente Gratis</h3>
+							<p>Sin pagos, sin suscripciones, sin anuncios. Una herramienta gratuita para siempre.</p>
+						</div>
+
+						<div class="feature-card">
+							<div class="feature-icon">
+								<i class="fas fa-bolt"></i>
+							</div>
+							<h3>Ligero y Rápido</h3>
+							<!-- This paragraph will be updated dynamically with the actual file size -->
+							<p>Cargando tamaño del archivo...</p>
+						</div>
+
+						<div class="feature-card">
+							<div class="feature-icon">
+								<i class="fas fa-lock"></i>
+							</div>
+							<h3>Seguro</h3>
+							<p>Tu computadora permanece exactamente igual después del desbloqueo. Sin cambios en el sistema.</p>
+						</div>
+
+						<div class="feature-card">
+							<div class="feature-icon">
+								<i class="fas fa-mouse-pointer"></i>
+							</div>
+							<h3>Fácil de Usar</h3>
+							<p>Interfaz simple e intuitiva. Configura tu contraseña y bloquea con un clic.</p>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<section class="how-it-works">
+				<div class="container">
+					<h2 class="section-title">¿Cómo funciona?</h2>
+					<p class="section-subtitle">En solo 3 pasos simples</p>
+
+					<div class="steps">
+						<div class="step">
+							<div class="step-number">1</div>
+							<h3>Descarga y Ejecuta</h3>
+							<p>Descarga WinLock.exe y ejecútalo directamente. No necesita instalación.</p>
+						</div>
+
+						<div class="step">
+							<div class="step-number">2</div>
+							<h3>Configura tu Contraseña</h3>
+							<p>Establece una contraseña segura que usarás para desbloquear tu pantalla.</p>
+						</div>
+
+						<div class="step">
+							<div class="step-number">3</div>
+							<h3>Bloquea tu Pantalla</h3>
+							<p>Haz clic en bloquear cuando te alejes. Para desbloquear, ingresa tu contraseña y presiona Enter.</p>
+						</div>
+					</div>
+				</div>
+			</section>
+		</main>
+
+		<footer>
+			<div class="container">
+				<p>&copy; <span id="year"></span> WinLock. Herramienta gratuita para proteger tu privacidad en Windows.</p>
+			</div>
+		</footer>
+
+		<script>
+			document.getElementById("year").textContent = new Date().getFullYear();
+
+			// Helper function to format bytes into human-readable format
+			function formatBytes(bytes, decimals = 2) {
+				if (bytes === 0) return "0 Bytes";
+				const k = 1024;
+				const dm = decimals < 0 ? 0 : decimals;
+				const sizes = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
+				const i = Math.floor(Math.log(bytes) / Math.log(k));
+				return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
+			}
+
+			const downloadBtn = document.getElementById("downloadBtn");
+			const fileInfoDiv = document.getElementById("fileInfo");
+			const repoOwner = "enderhacker";
+			const repoName = "WinLock";
+			const assetFileName = "WinLock.exe"; // The specific asset file name to look for
+
+			async function fetchLatestRelease() {
+				const apiUrl = "https://raw.githubusercontent.com/enderhacker/WinLock/main/version.json";
+
+				try {
+					const response = await fetch(apiUrl);
+					if (!response.ok) {
+						throw new Error(`Error al obtener versión: ${response.statusText || response.status}`);
+					}
+
+					const release = await response.json();
+					const latestVersion = release.tag_name;
+					const downloadUrl = release.download_url;
+					const fileSizeString = release.size; // Already a string like "11.4 MB"
+
+					if (downloadUrl) {
+						// Update button text and enable it
+						downloadBtn.innerHTML = `<i class="fas fa-download"></i> Descargar WinLock ${latestVersion}`;
+						downloadBtn.disabled = false;
+						downloadBtn.setAttribute("data-download-url", downloadUrl);
+
+						// Update file info text
+						fileInfoDiv.innerHTML = `Archivo EXE • ${fileSizeString} • Windows • Sin instalación requerida`;
+
+						// Update the "Ligero y Rápido" feature card with the dynamic size
+						const featureCards = document.querySelectorAll(".feature-card");
+						featureCards.forEach((card) => {
+							if (card.querySelector("h3")?.textContent === "Ligero y Rápido") {
+								const sizeParagraph = card.querySelector("p");
+								if (sizeParagraph) {
+									sizeParagraph.textContent = `Solo ${fileSizeString}. No consume recursos del sistema y funciona instantáneamente.`;
+								}
+							}
+						});
+
+						console.log(`Latest release: ${latestVersion}`);
+						console.log(`Download URL: ${downloadUrl}`);
+						console.log(`File size: ${fileSizeString}`);
+					} else {
+						fileInfoDiv.innerHTML = `Error: No se encontró el enlace de descarga.`;
+						downloadBtn.innerHTML = `<i class="fas fa-exclamation-triangle"></i> Descarga no disponible`;
+						downloadBtn.disabled = true;
+					}
+				} catch (error) {
+					console.error("Error fetching version.json:", error);
+					fileInfoDiv.innerHTML = `Error al cargar la información del archivo. Por favor, inténtelo más tarde.`;
+					downloadBtn.innerHTML = `<i class="fas fa-exclamation-triangle"></i> Error de descarga`;
+					downloadBtn.disabled = true;
+				}
+			}
+
+			// Initial fetch when the page loads
+			fetchLatestRelease();
+
+			// Modified click handler for the download button
+			downloadBtn.addEventListener("click", function (e) {
+				e.preventDefault();
+
+				// Simple animation feedback
+				this.style.transform = "scale(0.95)";
+				setTimeout(() => {
+					this.style.transform = "scale(1)";
+				}, 150);
+
+				// Retrieve the dynamically set download URL
+				const downloadUrl = this.getAttribute("data-download-url");
+				const filename = assetFileName; // Use the identified asset file name
+
+				if (downloadUrl) {
+					const a = document.createElement("a");
+					a.href = downloadUrl;
+					a.download = filename; // Suggest the original file name for download
+					document.body.appendChild(a);
+					a.click();
+					document.body.removeChild(a);
+					console.log(`WinLock download initiated from ${downloadUrl}`);
+				} else {
+					console.error("Download URL not available.");
+					alert("La URL de descarga no está disponible. Por favor, inténtelo más tarde.");
+				}
+			});
+
+			// Add smooth scrolling for any internal links
+			document.querySelectorAll('a[href^="#"]').forEach((anchor) => {
+				anchor.addEventListener("click", function (e) {
+					e.preventDefault();
+					const target = document.querySelector(this.getAttribute("href"));
+					if (target) {
+						target.scrollIntoView({
+							behavior: "smooth",
+							block: "start",
+						});
+					}
+				});
+			});
+
+			// Add entrance animations
+			const observerOptions = {
+				threshold: 0.1,
+				rootMargin: "0px 0px -50px 0px",
+			};
+
+			const observer = new IntersectionObserver((entries) => {
+				entries.forEach((entry) => {
+					if (entry.isIntersecting) {
+						entry.target.style.opacity = "1";
+						entry.target.style.transform = "translateY(0)";
+					}
+				});
+			}, observerOptions);
+
+			// Observe feature cards and steps for animation
+			document.querySelectorAll(".feature-card, .step").forEach((el) => {
+				el.style.opacity = "0";
+				el.style.transform = "translateY(20px)";
+				el.style.transition = "opacity 0.6s ease, transform 0.6s ease";
+				observer.observe(el);
+			});
+		</script>
+	</body>
+</html>
