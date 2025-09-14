@@ -10,6 +10,9 @@ try:
     import os
     import sys
     import threading
+    import json
+    import urllib.request
+    import webbrowser
     import locale
     from datetime import datetime
 except ImportError:
@@ -17,7 +20,7 @@ except ImportError:
     root = tk.Tk()
     root.withdraw()
     messagebox.showerror(
-        "Error de Instalación - WinLock",
+        "Instalación fallida - WinLock",
         "Faltan bibliotecas necesarias. Reinstala la aplicación.",
     )
     sys.exit(1)
@@ -26,6 +29,11 @@ except ImportError:
 
 LOG_FOLDER_NAME = "WinLock"
 LOG_FILE_NAME = f"logs-{datetime.now().strftime('%d_%m_%Y-%H_%M_%S')}.txt"
+LOCAL_VERSION = "v0.4"
+LATEST_VERSION_JSON = (
+    "https://raw.githubusercontent.com/enderhacker/WinLock/refs/heads/main/version.json"
+)
+UPDATE_URL = "https://winlock.labdigital.es"
 
 
 def get_log_path():
@@ -47,30 +55,22 @@ def get_log_path():
 LOG_DIRECTORY = get_log_path()
 LOG_FILE_PATH = os.path.join(LOG_DIRECTORY, LOG_FILE_NAME)
 
-# Crear el directorio de logs si no existe.
 try:
     os.makedirs(LOG_DIRECTORY, exist_ok=True)
 except OSError:
-    # Si falla la creación del directorio, no se podrán guardar logs.
-    # Se podría mostrar un error, pero se opta por un fallo silencioso para no interrumpir la app.
     pass
 
 
 def write_log(message):
     """Escribe un mensaje detallado con timestamp en el archivo de logs."""
     try:
-        # Formato de timestamp: Año-Mes-Día Hora:Minuto:Segundo,Milisegundo
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
         log_entry = f"[{timestamp}] - {message}\n"
 
         with open(LOG_FILE_PATH, "a", encoding="utf-8") as log_file:
             log_file.write(log_entry)
     except Exception as e:
-        # Si la escritura del log falla, se imprime en la consola para no crashear la app.
         print(f"Error al escribir en el log: {e}", file=sys.stderr)
-
-
-# --- CÓDIGO DE LA APLICACIÓN (con logging integrado) ---
 
 
 def resource_path(relative_path):
@@ -128,7 +128,7 @@ class WinLock:
                 )
 
         # --- Configurar la ventana principal ---
-        self.root.title("WinLock")
+        self.root.title(f"WinLock {LOCAL_VERSION}")
         self.root.geometry("350x200")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._quit_app)
@@ -177,7 +177,6 @@ class WinLock:
         ttk.Label(self.setup_frame, text="Contraseña:").pack(anchor="w")
         self.password_entry = ttk.Entry(self.setup_frame, show="•", width=35)
         self.password_entry.pack(fill=tk.X, pady=(2, 8), ipady=3)
-        self.password_entry.focus_set()
 
         ttk.Label(self.setup_frame, text="Repetir Contraseña:").pack(anchor="w")
         self.confirm_entry = ttk.Entry(self.setup_frame, show="•", width=35)
@@ -190,6 +189,10 @@ class WinLock:
             style="Lock.TButton",
         )
         self.lock_button.pack(pady=0, ipady=0, fill=tk.X)
+
+        self.root.lift()
+        self.root.focus_force()
+        self.password_entry.focus_set()
 
         self.root.bind("<Return>", lambda event: self.validate_and_confirm())
         write_log("Ventana de configuración de contraseña creada y visible.")
@@ -395,6 +398,15 @@ class WinLock:
             write_log("Ventana configurada y grab_set() activado.")
 
             # --- Contenido UI ---
+            version_label = tk.Label(
+                lock_window,
+                text=f"WinLock {LOCAL_VERSION} - https://winlock.labdigital.es",
+                font=("Segoe UI", 10),
+                fg="#808080",
+                bg="#1c1c1c",
+            )
+            version_label.place(x=10, y=10, anchor="nw")
+
             tk.Label(
                 lock_window,
                 text="WinLock",
@@ -495,13 +507,6 @@ class WinLock:
                 fg="#A0A0A0",
                 bg="#1c1c1c",
             ).pack()
-            tk.Label(
-                bottom_frame,
-                text="Aplicación 'WinLock' - https://winlock.labdigital.es",
-                font=("Segoe UI", 10),
-                fg="#A0A0A0",
-                bg="#1c1c1c",
-            ).pack(pady=(5, 0))
 
             def check_password():
                 entered_pass = unlock_entry.get()
@@ -522,7 +527,8 @@ class WinLock:
                 # --- LOGGING ---
                 if not lock_window.winfo_exists():
                     write_log("Ventana no existe. Ignorando pulsación.")
-                    return
+                    unlock_entry.config(state="readonly")
+                    return False
 
                 key_name = event.name.lower()
                 if status_label.cget("text"):
@@ -532,21 +538,20 @@ class WinLock:
 
                 if key_name == "enter":
                     check_password()
+                    unlock_entry.config(state="readonly")
+                    return False
                 elif key_name == "backspace":
                     current_text = unlock_entry.get()
                     if current_text:
                         unlock_entry.delete(len(current_text) - 1, tk.END)
+                    unlock_entry.config(state="readonly")
+                    return False
                 elif len(key_name) == 1 and key_name not in NON_PRINTABLE_KEYS:
                     caps_on = user32.GetKeyState(VK_CAPITAL) & 1
                     shift_on = keyboard.is_pressed("shift") or keyboard.is_pressed(
                         "right shift"
                     )
-                    char = (
-                        event.name
-                    )  # Usar event.name original para preservar mayúsculas/minúsculas de símbolos
-
-                    # La librería 'keyboard' ya suele devolver el carácter correcto
-                    # (ej: Shift+'5' -> '%'). Esta lógica refina el manejo para letras.
+                    char = event.name
                     if "a" <= key_name <= "z":
                         is_upper = (caps_on and not shift_on) or (
                             not caps_on and shift_on
@@ -554,6 +559,8 @@ class WinLock:
                         char = key_name.upper() if is_upper else key_name.lower()
 
                     unlock_entry.insert(tk.END, char)
+                    unlock_entry.config(state="readonly")
+                    return False
 
                 unlock_entry.config(state="readonly")
 
@@ -608,8 +615,47 @@ class WinLock:
         sys.exit(0)
 
 
+def check_latest_version():
+    write_log("Comprobando la última versión disponible...")
+    try:
+        with urllib.request.urlopen(LATEST_VERSION_JSON, timeout=5) as response:
+            data = response.read()
+            latest_info = json.loads(data)
+            latest_tag = latest_info.get("tag_name", LOCAL_VERSION)
+            write_log(f"Versión local: {LOCAL_VERSION}, Versión remota: {latest_tag}")
+
+            if latest_tag != LOCAL_VERSION:
+                write_log(
+                    "Existe una nueva versión disponible, preguntando al usuario..."
+                )
+                root = tk.Tk()
+                root.withdraw()
+                try:
+                    root.iconbitmap(resource_path("winlock.ico"))
+                except Exception as e:
+                    write_log(f"No se pudo establecer el icono de el actualizador: {e}")
+                result = messagebox.askquestion(
+                    "Nueva versión disponible",
+                    f"Tu versión: {LOCAL_VERSION}\nÚltima versión: {latest_tag}\n\n¿Deseas actualizar WinLock?",
+                    icon="warning",
+                )
+                if result == "yes":
+                    write_log(f"Usuario eligió actualizar. Abriendo {UPDATE_URL}")
+                    webbrowser.open(UPDATE_URL)
+                    sys.exit(0)
+                else:
+                    write_log("Usuario eligió continuar con la versión actual.")
+                root.destroy()
+            else:
+                write_log("La versión local está actualizada.")
+
+    except Exception as e:
+        write_log(f"No se pudo verificar la última versión: {e}")
+
+
 if __name__ == "__main__":
-    write_log("\n" + "=" * 50 + "\nIniciando nueva sesión de WinLock.")
+    write_log("\n" + "=" * 50 + "\nIniciando nueva sesión de WinLock " + LOCAL_VERSION)
+    check_latest_version()
     app_instance = None
     try:
         root = tk.Tk()
