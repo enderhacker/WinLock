@@ -172,6 +172,7 @@
 				box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 				transition: background 0.2s;
 				text-decoration: none;
+				margin: auto;
 			}
 
 			.github-btn:hover {
@@ -413,8 +414,6 @@
 						Cargando versión...
 						<div class="file-info" id="fileInfo">Cargando información del archivo...</div>
 					</button>
-					<italic>Creado por Jaime Muñiz García</italic>
-					<br />
 					<button class="github-btn" onclick="window.open('https://github.com/enderhacker/WinLock', '_blank')">
 						<svg viewBox="0 0 16 16" version="1.1" aria-hidden="true">
 							<path
@@ -424,6 +423,7 @@
 						</svg>
 						Ver en GitHub
 					</button>
+					<italic>Creado por Jaime Muñiz García</italic>
 				</div>
 			</section>
 
@@ -536,34 +536,32 @@
 			const fileInfoDiv = document.getElementById("fileInfo");
 			const repoOwner = "enderhacker";
 			const repoName = "WinLock";
-			const assetFileName = "WinLock.exe"; // The specific asset file name to look for
+			const assetFileName = "WinLock.exe"; // Nombre del archivo a descargar
 
 			async function fetchLatestRelease() {
 				const apiUrl = "https://raw.githubusercontent.com/enderhacker/WinLock/main/version.json";
 
 				try {
 					const response = await fetch(apiUrl);
-					if (!response.ok) {
-						throw new Error(`Error al obtener versión: ${response.statusText || response.status}`);
-					}
+					if (!response.ok) throw new Error(`Error al obtener versión: ${response.statusText || response.status}`);
 
 					const release = await response.json();
 					const latestVersion = release.tag_name;
 					const downloadUrl = release.download_url;
-					const fileSizeString = release.size; // Already a string like "11.4 MB"
+					const fileSizeString = release.size;
 
 					if (downloadUrl) {
-						// Update button text and enable it
-						downloadBtn.innerHTML = `<i class="fas fa-download"></i> Descargar WinLock.exe ${latestVersion}`;
+						// Mantener el icono y actualizar solo el texto
+						downloadBtn.querySelector("i").className = "fas fa-download";
+						downloadBtn.childNodes[1].textContent = ` Descargar ${assetFileName} ${latestVersion}`;
 						downloadBtn.disabled = false;
 						downloadBtn.setAttribute("data-download-url", downloadUrl);
 
-						// Update file info text
-						fileInfoDiv.innerHTML = `${fileSizeString} • Windows`;
+						// Actualizar info del archivo
+						fileInfoDiv.textContent = `${fileSizeString} • Windows`;
 
-						// Update the "Ligero y Rápido" feature card with the dynamic size
-						const featureCards = document.querySelectorAll(".feature-card");
-						featureCards.forEach((card) => {
+						// Actualizar el card de "Ligero y Rápido"
+						document.querySelectorAll(".feature-card").forEach((card) => {
 							if (card.querySelector("h3")?.textContent === "Ligero y Rápido") {
 								const sizeParagraph = card.querySelector("p");
 								if (sizeParagraph) {
@@ -576,39 +574,37 @@
 						console.log(`Download URL: ${downloadUrl}`);
 						console.log(`File size: ${fileSizeString}`);
 					} else {
-						fileInfoDiv.innerHTML = `Error: No se encontró el enlace de descarga.`;
-						downloadBtn.innerHTML = `<i class="fas fa-exclamation-triangle"></i> Descarga no disponible`;
+						fileInfoDiv.textContent = "Error: No se encontró el enlace de descarga.";
+						downloadBtn.querySelector("i").className = "fas fa-exclamation-triangle";
+						downloadBtn.childNodes[1].textContent = " Descarga no disponible";
 						downloadBtn.disabled = true;
 					}
 				} catch (error) {
 					console.error("Error fetching version.json:", error);
-					fileInfoDiv.innerHTML = `Error al cargar la información del archivo. Por favor, inténtelo más tarde.`;
-					downloadBtn.innerHTML = `<i class="fas fa-exclamation-triangle"></i> Error de descarga`;
+					fileInfoDiv.textContent = "Error al cargar la información del archivo. Por favor, inténtelo más tarde.";
+					downloadBtn.querySelector("i").className = "fas fa-exclamation-triangle";
+					downloadBtn.childNodes[1].textContent = " Error de descarga";
 					downloadBtn.disabled = true;
 				}
 			}
 
-			// Initial fetch when the page loads
+			// Inicial fetch al cargar la página
 			fetchLatestRelease();
 
-			// Modified click handler for the download button
+			// Click handler del botón
 			downloadBtn.addEventListener("click", function (e) {
 				e.preventDefault();
 
-				// Simple animation feedback
+				// Animación feedback
 				this.style.transform = "scale(0.95)";
-				setTimeout(() => {
-					this.style.transform = "scale(1)";
-				}, 150);
+				setTimeout(() => (this.style.transform = "scale(1)"), 150);
 
-				// Retrieve the dynamically set download URL
 				const downloadUrl = this.getAttribute("data-download-url");
-				const filename = assetFileName; // Use the identified asset file name
 
 				if (downloadUrl) {
 					const a = document.createElement("a");
 					a.href = downloadUrl;
-					a.download = filename; // Suggest the original file name for download
+					a.download = assetFileName;
 					document.body.appendChild(a);
 					a.click();
 					document.body.removeChild(a);
