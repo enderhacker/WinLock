@@ -1,35 +1,37 @@
+LOCAL_VERSION = "v0.5"
+
 try:
     import psutil
     import subprocess
     import tkinter as tk
     from tkinter import ttk, messagebox
     import time
+    import random
+    import sys
     import ctypes
     import ctypes.wintypes
     import keyboard
     import os
-    import sys
     import threading
     import json
     import urllib.request
     import webbrowser
     import locale
     from datetime import datetime
-except ImportError:
-    # This part runs if essential libraries are missing. Logging is not available yet.
+except ImportError as e:
     root = tk.Tk()
     root.withdraw()
     messagebox.showerror(
         "Instalación fallida - WinLock",
         "Faltan bibliotecas necesarias. Reinstala la aplicación.",
     )
+    print(e)
     sys.exit(1)
 
-# --- CONFIGURACIÓN DEL SISTEMA DE LOGS ---
-
+CREATE_NEW_PROCESS_GROUP = 0x00000200
+DETACHED_PROCESS = 0x00000008
 LOG_FOLDER_NAME = "WinLock"
 LOG_FILE_NAME = f"logs-{datetime.now().strftime('%d_%m_%Y-%H_%M_%S')}.txt"
-LOCAL_VERSION = "v0.4"
 LATEST_VERSION_JSON = (
     "https://raw.githubusercontent.com/enderhacker/WinLock/refs/heads/main/version.json"
 )
@@ -39,16 +41,13 @@ UPDATE_URL = "https://winlock.labdigital.es"
 def get_log_path():
     """Obtiene la ruta para el archivo de logs en una carpeta que no requiere permisos."""
     try:
-        # APPDATA es la ubicación estándar y preferida para datos de aplicación.
         app_data_path = os.environ.get("APPDATA")
         if not app_data_path:
-            # Si APPDATA no está disponible, usar el directorio home del usuario como alternativa.
             app_data_path = os.path.expanduser("~")
 
         log_dir = os.path.join(app_data_path, LOG_FOLDER_NAME)
         return log_dir
     except Exception:
-        # Como último recurso, usar el directorio del script.
         return os.path.abspath(".")
 
 
@@ -127,7 +126,6 @@ class WinLock:
                     f"ADVERTENCIA: No se pudo configurar el locale en español: {e}"
                 )
 
-        # --- Configurar la ventana principal ---
         self.root.title(f"WinLock {LOCAL_VERSION}")
         self.root.geometry("350x200")
         self.root.resizable(False, False)
@@ -140,7 +138,6 @@ class WinLock:
 
         self.center_window(self.root)
 
-        # --- Configuración de estilo ---
         self.style = ttk.Style(self.root)
         self.style.theme_use("clam")
         self.style.configure("TLabel", font=("Segoe UI", 10))
@@ -246,7 +243,6 @@ class WinLock:
         self.lock_start_time = time.time()
         self.start_watchdog()
         try:
-            # Previene que el sistema entre en modo de suspensión
             ctypes.windll.kernel32.SetThreadExecutionState(
                 0x80000000 | 0x00000001 | 0x00000002
             )
@@ -338,13 +334,11 @@ class WinLock:
         write_log("Iniciando la creación de la pantalla de bloqueo de alta seguridad.")
         user32 = ctypes.windll.user32
 
-        # --- Constantes para el estado de las teclas ---
-        VK_CAPITAL = 0x14  # Caps Lock
+        VK_CAPITAL = 0x14
 
         self._hide_system_cursor()
         lock_window = tk.Toplevel(self.root)
 
-        # Lista de teclas que no producen caracteres y deben ser ignoradas.
         NON_PRINTABLE_KEYS = [
             "shift",
             "right shift",
@@ -387,7 +381,6 @@ class WinLock:
         ]
 
         try:
-            # --- Configuración de ventana ---
             lock_window.title("WinLock - Bloqueado")
             lock_window.attributes("-fullscreen", True)
             lock_window.attributes("-topmost", True)
@@ -397,7 +390,6 @@ class WinLock:
             lock_window.grab_set()
             write_log("Ventana configurada y grab_set() activado.")
 
-            # --- Contenido UI ---
             version_label = tk.Label(
                 lock_window,
                 text=f"WinLock {LOCAL_VERSION} - https://winlock.labdigital.es",
@@ -524,7 +516,6 @@ class WinLock:
                     status_label.after(3000, lambda: status_label.config(text=""))
 
             def handle_key_press(event):
-                # --- LOGGING ---
                 if not lock_window.winfo_exists():
                     write_log("Ventana no existe. Ignorando pulsación.")
                     unlock_entry.config(state="readonly")
@@ -564,7 +555,6 @@ class WinLock:
 
                 unlock_entry.config(state="readonly")
 
-            # --- Keyboard Hooking ---
             keyboard.on_press(handle_key_press, suppress=True)
             write_log("Hook de teclado global con supresión activado.")
 
@@ -603,7 +593,6 @@ class WinLock:
         start_explorer_if_not_running()
 
         try:
-            # Restaurar el estado de ejecución normal del hilo
             ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
             write_log("Estado de ejecución del hilo restaurado a la normalidad.")
         except Exception as e:
@@ -614,51 +603,242 @@ class WinLock:
         write_log("Salida de la aplicación completada. sys.exit(0).")
         sys.exit(0)
 
-
-def check_latest_version():
-    write_log("Comprobando la última versión disponible...")
+def check_and_update(local_version):
+    """
+    Verifies if there is a new version. If so, it handles the entire update
+    process within a single, reusable Tkinter window.
+    """
+    write_log("Buscando la versión más reciente...")
     try:
-        with urllib.request.urlopen(LATEST_VERSION_JSON, timeout=5) as response:
+        # GitHub API requires a User-Agent header.
+        req = urllib.request.Request(LATEST_VERSION_JSON, headers={'User-Agent': 'WinLock Updater'})
+        with urllib.request.urlopen(req, timeout=10) as response:
             data = response.read()
             latest_info = json.loads(data)
-            latest_tag = latest_info.get("tag_name", LOCAL_VERSION)
-            write_log(f"Versión local: {LOCAL_VERSION}, Versión remota: {latest_tag}")
-
-            if latest_tag != LOCAL_VERSION:
-                write_log(
-                    "Existe una nueva versión disponible, preguntando al usuario..."
-                )
-                root = tk.Tk()
-                root.withdraw()
-                try:
-                    root.iconbitmap(resource_path("winlock.ico"))
-                except Exception as e:
-                    write_log(f"No se pudo establecer el icono de el actualizador: {e}")
-                result = messagebox.askquestion(
-                    "Nueva versión disponible",
-                    f"Tu versión: {LOCAL_VERSION}\nÚltima versión: {latest_tag}\n\n¿Deseas actualizar WinLock?",
-                    icon="warning",
-                )
-                if result == "yes":
-                    write_log(f"Usuario eligió actualizar. Abriendo {UPDATE_URL}")
-                    webbrowser.open(UPDATE_URL)
-                    sys.exit(0)
-                else:
-                    write_log("Usuario eligió continuar con la versión actual.")
-                root.destroy()
-            else:
-                write_log("La versión local está actualizada.")
-
+            latest_tag = latest_info.get("tag_name", local_version)
     except Exception as e:
-        write_log(f"No se pudo verificar la última versión: {e}")
+        write_log(f"No se pudo verificar la versión más reciente: {e}")
+        return # Silently fail if there is no network connection
 
+    write_log(f"Versión local: {local_version}, Versión remota: {latest_tag}")
 
+    if latest_tag == local_version:
+        write_log("La versión local ya está actualizada.")
+        return # The application is up to date.
+
+    # --- A new version is available, start the update process ---
+    write_log("Nueva versión disponible. Iniciando interfaz de actualización.")
+
+    download_url = latest_info.get("download_url")
+    if not download_url:
+        write_log("Error: No se encontró una URL de descarga para el archivo .exe en la nueva versión.")
+        return
+
+    # --- Create and manage the single UI window for the entire process ---
+    root = tk.Tk()
+    root.title("Actualizador WinLock")
+    root.geometry("450x170")
+    root.resizable(False, False)
+    def center_window(win):
+        """Centra una ventana de tkinter en la pantalla."""
+        win.update_idletasks()
+        width = win.winfo_width()
+        height = win.winfo_height()
+        x = (win.winfo_screenwidth() // 2) - (width // 2)
+        y = (win.winfo_screenheight() // 2) - (height // 2)
+        win.geometry(f"{width}x{height}+{x}+{y}")
+        write_log(f"Ventana centrada en {x},{y} con tamaño {width}x{height}.")
+    center_window(root)
+    
+    # Try to set an icon if available
+    try:
+        root.iconbitmap(resource_path("winlock.ico")) 
+        pass
+    except Exception as e:
+        write_log(f"No se pudo establecer el ícono del actualizador: {e}")
+
+    def clear_window():
+        """Removes all widgets from the root window."""
+        for widget in root.winfo_children():
+            widget.destroy()
+
+    def run_finalizer_script(old_exe_path, new_exe_path, script_path):
+        """Generates and executes a PowerShell script to replace the executable and log in real-time."""
+        def ps_escape(s):
+            return s.replace("'", "''")
+
+        old_esc = ps_escape(old_exe_path)
+        new_esc = ps_escape(new_exe_path)
+        self_esc = ps_escape(script_path)
+        write_log(f"Creando script de actualización en {self_esc}")
+
+        ps_script = rf"""
+param()
+
+$old = '{old_esc}'
+$new = '{new_esc}'
+$self = '{self_esc}'
+
+$running = Get-Process -Name "WinLock" -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -and $_.Path -eq $old }}
+if ($running) {{
+    foreach ($proc in $running) {{
+        try {{
+            Stop-Process -Id $proc.Id -Force -ErrorAction Stop
+        }} catch {{
+        }}
+    }}
+    Start-Sleep -Milliseconds 500
+}}
+taskkill /f /im WinLock.exe
+
+$maxRetries = 10
+for ($i=0; $i -lt $maxRetries; $i++) {{
+    try {{
+        Remove-Item -LiteralPath $old -Force -ErrorAction Stop
+        break
+    }} catch {{
+        Start-Sleep -Seconds 1
+    }}
+}}
+
+if (Test-Path $old) {{
+}} else {{
+    Move-Item -LiteralPath $new -Destination $old -Force -ErrorAction SilentlyContinue
+}}
+
+Start-Process -FilePath $old
+
+Start-Sleep -Seconds 1
+try {{ Remove-Item -LiteralPath $self -Force -ErrorAction SilentlyContinue }} catch {{}}
+""".lstrip()
+
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(ps_script)
+        
+        write_log(f"Iniciando {script_path}...")
+
+        powershell_cmd = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-WindowStyle", "Hidden",
+            "-Command",
+            f"Start-Process powershell -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"{script_path}\"' -WindowStyle Hidden -Verb RunAs"
+        ]
+
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+        subprocess.Popen(
+            powershell_cmd,
+            startupinfo=si,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            close_fds=True
+        )
+
+        write_log(f"{script_path} iniciado correctamente.")
+        time.sleep(1)
+        try:
+            root.destroy()
+        except:
+            pass
+        sys.exit(0)
+
+    def start_download_ui():
+        """Clears the window and sets up the download progress UI."""
+        clear_window()
+        write_log("El usuario aceptó la actualización. Mostrando la barra de progreso.")
+
+        exe_path = os.path.abspath(sys.executable)
+        temp_dir = os.environ.get("TEMP", os.environ.get("TMP", "."))
+        random_name = f"winlock_update_{int(time.time())}_{random.randint(1000, 9999)}"
+        new_exe_temp_path = os.path.join(temp_dir, random_name)
+        ps_script_path = os.path.join(temp_dir, f"update_winlock_{int(time.time())}_{random.randint(1000, 9999)}.ps1")
+        
+        label = tk.Label(root, text="Descargando actualización...", font=("Segoe UI", 11))
+        label.pack(pady=20)
+
+        progress = ttk.Progressbar(root, orient="horizontal", length=350, mode="determinate")
+        progress.pack(pady=10)
+        
+        status_label = tk.Label(root, text="", font=("Segoe UI", 9))
+        status_label.pack(pady=5)
+
+        def reporthook(block_num, block_size, total_size):
+            """Reports download progress to the progress bar and labels."""
+            downloaded = block_num * block_size
+            if total_size > 0:
+                percent = int(downloaded * 100 / total_size)
+                progress["value"] = percent
+                downloaded_mb = downloaded / (1024 * 1024)
+                total_mb = total_size / (1024 * 1024)
+                status_label.config(text=f"{downloaded_mb:.2f} MB / {total_mb:.2f} MB")
+                root.update_idletasks()
+
+        def download_thread_target():
+            """Runs the download in a separate thread to keep the GUI responsive."""
+            write_log(f"Iniciando descarga desde: {download_url}")
+            try:
+                urllib.request.urlretrieve(download_url, new_exe_temp_path, reporthook)
+                write_log("Descarga completada con éxito.")
+                label.config(text="Descarga completa. Finalizando actualización...")
+                status_label.config(text="Por favor, espere...")
+                root.update_idletasks()
+                time.sleep(1)
+                write_log("Llamando a run_finalizer_script()")
+                run_finalizer_script(exe_path, new_exe_temp_path, ps_script_path)
+            except Exception as e:
+                write_log(f"Error durante la descarga: {e}")
+                messagebox.showerror("Error de Descarga", f"No se pudo descargar la actualización:\n{e}", parent=root)
+                root.destroy()
+        
+        threading.Thread(target=download_thread_target, daemon=True).start()
+
+    def ask_for_update():
+        """Sets up the initial UI to ask the user for permission to update."""
+        write_log("Mostrando pregunta de confirmación al usuario.")
+        
+        label = tk.Label(
+            root, 
+            text=f"Hay una nueva versión de WinLock disponible.\n\n"
+                 f"Su versión: {local_version}\n"
+                 f"Última versión: {latest_tag}\n\n"
+                 f"¿Desea actualizar ahora? La aplicación se reiniciará.",
+            font=("Segoe UI", 10),
+            justify=tk.LEFT
+        )
+        label.pack(pady=10, padx=10)
+        
+        button_frame = tk.Frame(root)
+        button_frame.pack(pady=10)
+
+        def on_no():
+            write_log("El usuario eligió no actualizar.")
+            root.destroy()
+
+        yes_btn = tk.Button(button_frame, text="Sí, actualizar ahora", command=start_download_ui)
+        yes_btn.pack(side=tk.LEFT, padx=10)
+        
+        no_btn = tk.Button(button_frame, text="No, en otro momento", command=on_no)
+        no_btn.pack(side=tk.LEFT, padx=10)
+        
+    # --- Start the UI process ---
+    ask_for_update()
+    root.mainloop()
+    
 if __name__ == "__main__":
     write_log("\n" + "=" * 50 + "\nIniciando nueva sesión de WinLock " + LOCAL_VERSION)
-    check_latest_version()
+    check_and_update(LOCAL_VERSION)
     app_instance = None
     try:
         root = tk.Tk()
+        try:
+            root.iconbitmap(resource_path("winlock.ico")) 
+            pass
+        except Exception as e:
+            write_log(f"No se pudo establecer el ícono del actualizador: {e}")
         app_instance = WinLock(root)
         write_log("Bucle principal de la aplicación (mainloop) iniciado.")
         root.mainloop()
@@ -672,7 +852,6 @@ if __name__ == "__main__":
             app_instance._quit_app()
             write_log("Aplicación finalizada.\n" + "=" * 50 + "\n")
         else:
-            # En caso de que la app falle antes de instanciarse.
             write_log(
                 "La instancia de la aplicación no existía, ejecutando limpieza manual."
             )

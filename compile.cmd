@@ -3,6 +3,13 @@
 @echo off
 SETLOCAL
 
+REM --- Relaunch self as admin, bypassing execution policy ---
+NET SESSION >nul 2>&1
+IF %ERRORLEVEL% NEQ 0 (
+    echo Run as admin!!!
+    exit /b
+)
+
 REM --- Variables ---
 SET EXE_NAME=WinLock.exe
 echo [DEBUG] EXE_NAME=%EXE_NAME%
@@ -37,22 +44,24 @@ IF NOT EXIST winlock.ico (
 )
 
 REM --- Step 2: Delete old dist/build ---
+echo [DEBUG] Stopping and deleting old WinLock.exe
+taskkill /f /im WinLock.exe >nul
 IF EXIST dist (
-    echo [DEBUG] Deleting old dist folder...
     rmdir /s /q dist
 )
 IF EXIST build (
-    echo [DEBUG] Deleting old build folder...
     rmdir /s /q build
 )
 IF EXIST WinLock.spec (
-    echo [DEBUG] Deleting old WinLock.spec...
     del /f /q WinLock.spec
 )
+IF EXIST pyarmor.bug.log del /f /q pyarmor.bug.log
+IF EXIST WinLock.exe del /f /q WinLock.exe
+echo [DEBUG] Stopped and deleted old WinLock.exe
 
 REM --- Step 3: PyArmor generate runtime ---
 echo [DEBUG] Running PyArmor...
-pyarmor gen --enable-jit .\main.py
+pyarmor gen .\main.py
 echo [DEBUG] PyArmor exited with code %ERRORLEVEL%
 IF %ERRORLEVEL% NEQ 0 (
     echo [ERROR] PyArmor failed!
@@ -68,6 +77,7 @@ pyinstaller --onefile --windowed --name WinLock --uac-admin --icon=winlock.ico ^
 --hidden-import psutil ^
 --hidden-import subprocess ^
 --hidden-import threading ^
+--hidden-import random ^
 --hidden-import tkinter ^
 --hidden-import tkinter.ttk ^
 --hidden-import tkinter.messagebox ^
@@ -75,6 +85,7 @@ pyinstaller --onefile --windowed --name WinLock --uac-admin --icon=winlock.ico ^
 --hidden-import tkinter.filedialog ^
 --hidden-import locale ^
 --hidden-import keyboard ^
+--hidden-import tempfile ^
 --hidden-import ctypes ^
 --hidden-import ctypes.wintypes ^
 --hidden-import os ^
@@ -84,7 +95,7 @@ pyinstaller --onefile --windowed --name WinLock --uac-admin --icon=winlock.ico ^
 --hidden-import urllib.request ^
 --hidden-import webbrowser ^
 --hidden-import datetime ^
---clean dist\main.py
+--clean dist\main.py 
 
 echo [DEBUG] PyInstaller exited with code %ERRORLEVEL%
 IF %ERRORLEVEL% NEQ 0 (
@@ -94,9 +105,17 @@ IF %ERRORLEVEL% NEQ 0 (
 )
 
 REM --- Step 5: Move exe to root and clean up ---
-IF EXIST dist\%EXE_NAME% (
+SET "SRC_PATH=%CD%\dist\%EXE_NAME%"
+SET "DST_PATH=%CD%\%EXE_NAME%"
+IF EXIST "%SRC_PATH%" (
+    echo [DEBUG] Final executable found at: "%SRC_PATH%" - Moving to "%DST_PATH%"...
+    timeout /t 1 /nobreak >nul
     echo [DEBUG] Moving executable to root folder...
-    move /Y dist\%EXE_NAME% .\%EXE_NAME%
+    move /Y "%SRC_PATH%" "%DST_PATH%" 2>nul
+    IF %ERRORLEVEL% NEQ 0 (
+        echo [ERROR] Moving final executable failed!!!
+        exit /b
+    )
 )
 
 echo [DEBUG] Cleaning up dist, build & PyInstaller dust files...
@@ -107,6 +126,7 @@ IF EXIST build (
     rmdir /s /q build
 )
 IF EXIST WinLock.spec del /f /q WinLock.spec
+IF EXIST pyarmor.bug.log del /f /q pyarmor.bug.log
 echo.
 echo [DEBUG] Build complete! %EXE_NAME% is ready.
 echo.
