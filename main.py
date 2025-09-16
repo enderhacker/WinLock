@@ -1,4 +1,4 @@
-LOCAL_VERSION = "v0.5"
+LOCAL_VERSION = "v0.6"
 
 try:
     import psutil
@@ -110,6 +110,7 @@ class WinLock:
         write_log("Inicializando la aplicación WinLock.")
         self.root = root_window
         self.unlock_password = ""
+        self.lock_message_optional = ""
         self.lock_start_time = 0
         self._watchdog_thread = None
         self._watchdog_running = False
@@ -127,7 +128,7 @@ class WinLock:
                 )
 
         self.root.title(f"WinLock {LOCAL_VERSION}")
-        self.root.geometry("350x200")
+        self.root.geometry("400x340")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._quit_app)
         try:
@@ -168,38 +169,51 @@ class WinLock:
         if self.setup_frame:
             self.setup_frame.destroy()
 
+        # Marco principal
         self.setup_frame = ttk.Frame(self.root, padding="20 20 20 20")
         self.setup_frame.pack(expand=True, fill=tk.BOTH)
 
-        ttk.Label(self.setup_frame, text="Contraseña:").pack(anchor="w")
-        self.password_entry = ttk.Entry(self.setup_frame, show="•", width=35)
+        font_style = ("Segoe UI", 10)  # Fuente común para todos los widgets
+
+        # Campo de contraseña
+        ttk.Label(self.setup_frame, text="Contraseña:", font=font_style).pack(anchor="w")
+        self.password_entry = ttk.Entry(self.setup_frame, show="•", width=35, font=font_style)
         self.password_entry.pack(fill=tk.X, pady=(2, 8), ipady=3)
 
-        ttk.Label(self.setup_frame, text="Repetir Contraseña:").pack(anchor="w")
-        self.confirm_entry = ttk.Entry(self.setup_frame, show="•", width=35)
-        self.confirm_entry.pack(fill=tk.X, pady=(2, 15), ipady=3)
+        # Campo de mensaje (texto normal, multilinea)
+        ttk.Label(self.setup_frame, text="Mensaje (opcional):", font=font_style).pack(anchor="w")
+        self.message_text = tk.Text(
+            self.setup_frame, 
+            height=9,  # Incrementado ~50px (aprox. 4-5 líneas extra)
+            width=35, 
+            wrap="word", 
+            font=font_style
+        )
+        self.message_text.pack(fill=tk.BOTH, pady=(2, 15))
 
+        # Botón de bloqueo
         self.lock_button = ttk.Button(
             self.setup_frame,
             text="Bloquear",
             command=self.validate_and_confirm,
-            style="Lock.TButton",
+            style="Lock.TButton"
         )
         self.lock_button.pack(pady=0, ipady=0, fill=tk.X)
 
+        # Ajustes de foco y bindings
         self.root.lift()
         self.root.focus_force()
         self.password_entry.focus_set()
-
         self.root.bind("<Return>", lambda event: self.validate_and_confirm())
+
         write_log("Ventana de configuración de contraseña creada y visible.")
 
     def validate_and_confirm(self):
-        """Valida las contraseñas y pide confirmación al usuario antes de bloquear."""
+        """Valida la contraseña y el mensaje opcional, pide confirmación al usuario antes de bloquear."""
         write_log("Iniciando validación de contraseña.")
         pwd = self.password_entry.get()
-        confirm_pwd = self.confirm_entry.get()
 
+        # Validación de contraseña
         if len(pwd) < 1:
             write_log("Validación fallida: la contraseña está vacía.")
             messagebox.showwarning(
@@ -209,22 +223,36 @@ class WinLock:
             )
             return
 
-        if pwd != confirm_pwd:
-            write_log("Validación fallida: las contraseñas no coinciden.")
-            messagebox.showerror(
-                "Error",
-                "Las contraseñas no coinciden. Por favor, inténtalo de nuevo.",
-                parent=self.root,
-            )
-            self.password_entry.delete(0, tk.END)
-            self.confirm_entry.delete(0, tk.END)
-            self.password_entry.focus_set()
-            return
+        # Obtener mensaje opcional (desde tk.Text)
+        msg = self.message_text.get("1.0", tk.END).strip()
+        if msg == "":
+            self.lock_message_optional = None
+        else:
+            # Validación del mensaje
+            import string
+            if not all(ch in string.printable or ch.isspace() for ch in msg):
+                write_log("Validación fallida: el mensaje contiene caracteres no imprimibles.")
+                messagebox.showwarning(
+                    "Atención",
+                    "El mensaje contiene caracteres no válidos.",
+                    parent=self.root,
+                )
+                return
+            if len(msg) > 1000:
+                write_log("Validación fallida: el mensaje excede los 1000 caracteres.")
+                messagebox.showwarning(
+                    "Atención",
+                    "El mensaje no puede superar los 1000 caracteres.",
+                    parent=self.root,
+                )
+                return
+            self.lock_message_optional = msg
 
-        write_log("Validación de contraseña exitosa.")
+        write_log("Validación de contraseña y mensaje exitosa.")
         self.unlock_password = pwd
         self.setup_frame.destroy()
 
+        # Confirmación final del bloqueo
         if messagebox.askokcancel(
             "Confirmar Bloqueo", "¿Está seguro de que desea bloquear este ordenador?"
         ):
@@ -236,6 +264,7 @@ class WinLock:
                 "Usuario canceló el bloqueo del ordenador. Mostrando de nuevo la configuración."
             )
             self.create_setup_window()
+
 
     def start_locking_process(self):
         """Inicia el watchdog y crea la pantalla de bloqueo."""
@@ -482,19 +511,50 @@ class WinLock:
                 center_frame, text="", font=("Segoe UI", 11), fg="#ff3b30", bg="#1c1c1c"
             )
             status_label.pack(pady=5)
+            
+            if hasattr(self, "lock_message_optional") and self.lock_message_optional:
+                message_frame = tk.Frame(
+                    center_frame,
+                    bg="#2a2a2a",
+                    bd=1,
+                    relief="solid",
+                    padx=10,
+                    pady=10
+                )
+                message_frame.pack(pady=(25, 0))
+                title_label = tk.Label(
+                    message_frame,
+                    text="Mensaje del dueño del ordenador:",
+                    font=("Segoe UI", 12, "bold"),
+                    fg="#ffffff",
+                    bg="#2a2a2a",
+                    justify="center"
+                )
+                title_label.pack()
+                message_label = tk.Label(
+                    message_frame,
+                    text=self.lock_message_optional,
+                    font=("Segoe UI", 12),
+                    fg="#cccccc",
+                    bg="#2a2a2a",
+                    wraplength=600,
+                    justify="center"
+                )
+                message_label.pack()
+
 
             bottom_frame = tk.Frame(lock_window, bg="#1c1c1c")
             bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=20)
             tk.Label(
                 bottom_frame,
-                text="El dueño de este ordenador ha bloqueado el ordenador",
+                text="El dueño de este ordenador ha bloqueado el ordenador.",
                 font=("Segoe UI", 10),
                 fg="#A0A0A0",
                 bg="#1c1c1c",
             ).pack()
             tk.Label(
                 bottom_frame,
-                text="Escribe la contraseña y pulsa ENTER para desbloquearlo",
+                text="Escribe la contraseña y pulsa ENTER para desbloquearlo.",
                 font=("Segoe UI", 10),
                 fg="#A0A0A0",
                 bg="#1c1c1c",
