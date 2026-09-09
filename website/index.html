@@ -1,36 +1,47 @@
 <!DOCTYPE html>
-<html lang="es" class="dark scroll-smooth">
+<html lang="es">
+
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    
+
     <!-- SEO Esencial -->
-    <title>WinLock — Bloquea tu pantalla sin suspender Windows ni pausar tareas</title>
-    <meta name="description" content="Utilidad gratuita y portable para Windows. Bloquea todos tus monitores con contraseña sin interrumpir renders, descargas en curso ni suspender el equipo." />
+    <title>WinLock — Bloquea tu pantalla sin suspender Windows ni pausar tus tareas</title>
+    <meta name="description"
+        content="Utilidad gratuita, de código abierto y portable para Windows. Bloquea todos tus monitores con contraseña sin interrumpir renders, exportaciones ni descargas en segundo plano." />
     <meta name="author" content="Jaime Muñiz García (LabDigital)" />
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
     <link rel="canonical" href="https://winlock.labdigital.es" />
     <link rel="icon" href="winlock.ico" type="image/x-icon" />
 
-    <!-- Open Graph (Facebook, LinkedIn, Discord) -->
+    <!-- Open Graph (Facebook, LinkedIn, Discord, Telegram) -->
     <meta property="og:locale" content="es_ES" />
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="WinLock — Bloqueo de pantalla con notas y soporte multimonitor" />
-    <meta property="og:description" content="Protege tu puesto de trabajo. Bloquea múltiples monitores, deja una nota visible y mantén tu PC activo para descargas y renders en segundo plano." />
+    <meta property="og:title" content="WinLock — Bloqueo de pantalla sin suspensión para Windows" />
+    <meta property="og:description"
+        content="Protege tu puesto de trabajo. Bloquea múltiples monitores, deja un mensaje visible y mantén tu PC activo para descargas y renders." />
     <meta property="og:url" content="https://winlock.labdigital.es" />
     <meta property="og:site_name" content="WinLock" />
+    <meta property="og:image" content="https://winlock.labdigital.es/og-image.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Logotipo e interfaz de WinLock" />
 
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="WinLock para Windows" />
-    <meta name="twitter:description" content="Bloqueo con contraseña para entornos multimonitor sin suspensión del sistema." />
+    <meta name="twitter:description"
+        content="Bloqueo con contraseña para entornos multimonitor sin suspensión del equipo." />
+    <meta name="twitter:image" content="https://winlock.labdigital.es/og-image.png" />
 
-    <!-- Color de Tema & Rendimiento -->
+    <!-- Rendimiento & Tema -->
     <meta name="theme-color" content="#090a0d" />
-    <link rel="preconnect" href="https://useweft.dev" />
-    <link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin />
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin />
+
+    <!-- Font Awesome 6 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
+        integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA=="
+        crossorigin="anonymous" referrerpolicy="no-referrer" />
 
     <!-- Datos Estructurados JSON-LD (Schema.org) -->
     <script type="application/ld+json">
@@ -40,7 +51,7 @@
       "name": "WinLock",
       "operatingSystem": "Windows 10, Windows 11",
       "applicationCategory": "UtilitiesApplication",
-      "applicationSubCategory": "Security",
+      "applicationSubCategory": "SecurityApplication",
       "offers": {
         "@type": "Offer",
         "price": "0",
@@ -52,295 +63,615 @@
         "url": "https://labdigital.es"
       },
       "downloadUrl": "https://github.com/enderhacker/WinLock/releases",
-      "description": "Herramienta ligera y portable para Windows que bloquea todas las pantallas conectadas con contraseña, previene la suspensión del equipo e incluye notas para compañeros."
+      "description": "Utilidad ligera y portable para Windows que bloquea todas las pantallas con contraseña impidiendo la suspensión del sistema para continuar renders y descargas."
     }
     </script>
 
-    <!-- Tailwind CSS CDN Configurado -->
-    <script src="https://useweft.dev/client/latest.js"></script>
-    <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    fontFamily: {
-                        sans: ['-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', 'sans-serif'],
-                        mono: ['JetBrains Mono', 'Consolas', 'Courier New', 'monospace'],
-                    },
-                    colors: {
-                        brand: {
-                            bg: '#090a0d',
-                            surface: '#111317',
-                            surfaceHover: '#16191f',
-                            border: '#1f232b',
-                            borderSubtle: '#2a303c',
-                            muted: '#717885',
-                        }
-                    }
-                }
+    <style>
+        :root {
+            --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            --font-mono: "JetBrains Mono", Consolas, "Courier New", monospace;
+
+            --bg: #090a0d;
+            --surface: #111317;
+            --surface-card: #13161c;
+            --surface-hover: #181b22;
+            --border: #1f232b;
+            --border-subtle: #2b313d;
+
+            --text-primary: #f4f4f5;
+            --text-secondary: #9ea4b0;
+            --text-muted: #6b7280;
+            --accent: #3b82f6;
+            --accent-light: #60a5fa;
+            --accent-glow: rgba(59, 130, 246, 0.12);
+
+            --radius-sm: 0.375rem;
+            --radius-md: 0.5rem;
+            --radius-lg: 0.875rem;
+            --max-w: 58rem;
+        }
+
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html {
+            scroll-behavior: smooth;
+            background-color: var(--bg);
+            color-scheme: dark;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            background-color: var(--bg);
+            color: var(--text-primary);
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        ::selection {
+            background-color: #27272a;
+            color: #ffffff;
+        }
+
+        /* Enlace de accesibilidad para lectores de pantalla y teclado */
+        .skip-link {
+            position: absolute;
+            top: -3rem;
+            left: 1rem;
+            background: #ffffff;
+            color: #000000;
+            padding: 0.5rem 1rem;
+            z-index: 100;
+            font-weight: 600;
+            border-radius: var(--radius-sm);
+            transition: top 0.2s ease;
+        }
+
+        .skip-link:focus {
+            top: 1rem;
+            outline: 3px solid var(--accent);
+        }
+
+        a {
+            color: inherit;
+            text-decoration: none;
+        }
+
+        a:focus-visible,
+        button:focus-visible {
+            outline: 2px solid var(--accent-light);
+            outline-offset: 3px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: var(--max-w);
+            margin-left: auto;
+            margin-right: auto;
+            padding-left: 1.25rem;
+            padding-right: 1.25rem;
+        }
+
+        /* ==========================================================================
+           HEADER / NAVEGACIÓN
+           ========================================================================== */
+        .site-header {
+            position: sticky;
+            top: 0;
+            z-index: 40;
+            background-color: rgba(9, 10, 13, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header-content {
+            height: 4rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .brand-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.65rem;
+            padding: 0.25rem;
+            border-radius: var(--radius-sm);
+        }
+
+        .brand-icon {
+            width: 1.4rem;
+            height: 1.4rem;
+            object-fit: contain;
+        }
+
+        .brand-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+            letter-spacing: -0.015em;
+            color: #ffffff;
+        }
+
+        .version-badge {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            padding: 0.15rem 0.5rem;
+            border-radius: var(--radius-sm);
+            background-color: rgba(39, 39, 42, 0.6);
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+
+        .nav-links {
+            display: flex;
+            align-items: center;
+            gap: 1.25rem;
+            font-size: 0.875rem;
+        }
+
+        .nav-link {
+            color: var(--text-secondary);
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            transition: color 0.15s ease;
+        }
+
+        .nav-link:hover {
+            color: #ffffff;
+        }
+
+        /* ==========================================================================
+           HERO PRINCIPAL
+           ========================================================================== */
+        .main-content {
+            flex-grow: 1;
+        }
+
+        .hero-section {
+            padding-top: 4.5rem;
+            padding-bottom: 3.5rem;
+            text-align: center;
+        }
+
+        @media (min-width: 640px) {
+            .hero-section {
+                padding-top: 6rem;
+                padding-bottom: 4.5rem;
             }
         }
-    </script>
-</head>
-<body class="bg-brand-bg text-zinc-100 font-sans antialiased selection:bg-zinc-800 selection:text-white flex flex-col min-h-screen">
 
-    <!-- Cabecera / Navegación accesible -->
-    <header class="border-b border-brand-border/80 sticky top-0 z-40 bg-brand-bg/85 backdrop-blur-md">
-        <div class="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-            <a href="#" class="flex items-center gap-2.5 group focus-visible:outline-2 focus-visible:outline-blue-500 rounded p-1">
-                <img src="winlock.ico" alt="Icono de WinLock" class="w-6 h-6 object-contain" onerror="this.style.display='none'">
-                <span class="font-semibold text-sm tracking-tight text-white group-hover:text-zinc-300 transition-colors">WinLock</span>
-                <span id="navVersion" class="text-xs px-2 py-0.5 rounded font-mono bg-zinc-800/80 text-zinc-400 border border-zinc-700/60">v0.7</span>
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--accent-light);
+            background-color: var(--accent-glow);
+            border: 1px solid rgba(59, 130, 246, 0.25);
+            padding: 0.3rem 0.85rem;
+            border-radius: 9999px;
+            margin-bottom: 1.5rem;
+            letter-spacing: 0.02em;
+        }
+
+        .hero-title {
+            font-size: clamp(2rem, 5.5vw, 3.25rem);
+            line-height: 1.15;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            color: #ffffff;
+            max-width: 44rem;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .hero-desc {
+            margin: 1.35rem auto 0;
+            font-size: clamp(1rem, 2.5vw, 1.18rem);
+            line-height: 1.65;
+            color: var(--text-secondary);
+            max-width: 36rem;
+        }
+
+        .cta-container {
+            margin-top: 2.25rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.85rem;
+        }
+
+        .btn-download {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.65rem;
+            padding: 0.9rem 1.85rem;
+            border-radius: var(--radius-md);
+            background-color: #ffffff;
+            color: #09090b;
+            font-size: 0.95rem;
+            font-weight: 600;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+            transition: background-color 0.15s ease, transform 0.1s ease;
+        }
+
+        .btn-download:hover {
+            background-color: #e4e4e7;
+        }
+
+        .btn-download:active {
+            transform: scale(0.98);
+        }
+
+        .btn-meta {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+        }
+
+        /* ==========================================================================
+           CARACTERÍSTICAS DIRECTAS (3 COLUMNAS)
+           ========================================================================== */
+        .features-section {
+            padding: 2.5rem 0 3.5rem;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1.25rem;
+        }
+
+        @media (min-width: 768px) {
+            .features-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+
+        .feature-card {
+            background-color: var(--surface-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 1.75rem 1.4rem;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            transition: border-color 0.2s ease, transform 0.2s ease;
+        }
+
+        .feature-card:hover {
+            border-color: var(--border-subtle);
+            transform: translateY(-2px);
+        }
+
+        .icon-box {
+            width: 2.75rem;
+            height: 2.75rem;
+            border-radius: var(--radius-md);
+            background-color: var(--accent-glow);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            color: var(--accent-light);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.15rem;
+            margin-bottom: 1.15rem;
+        }
+
+        .feature-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #ffffff;
+            margin-bottom: 0.5rem;
+            letter-spacing: -0.015em;
+        }
+
+        .feature-text {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+
+        /* ==========================================================================
+           INSTRUCCIONES DE USO
+           ========================================================================== */
+        .steps-section {
+            padding: 3.5rem 0 5rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .section-header {
+            text-align: center;
+            margin-bottom: 2.75rem;
+        }
+
+        .section-title {
+            font-size: 1.35rem;
+            font-weight: 700;
+            color: #ffffff;
+            letter-spacing: -0.015em;
+        }
+
+        .steps-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1.5rem;
+        }
+
+        @media (min-width: 680px) {
+            .steps-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+
+        .step-item {
+            background-color: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 1.5rem;
+            position: relative;
+        }
+
+        .step-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--accent-light);
+            font-weight: 600;
+            margin-bottom: 0.65rem;
+        }
+
+        .step-heading {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #ffffff;
+            margin-bottom: 0.35rem;
+        }
+
+        .step-text {
+            font-size: 0.825rem;
+            color: var(--text-secondary);
+            line-height: 1.55;
+        }
+
+        .step-code {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            background-color: rgba(255, 255, 255, 0.06);
+            padding: 0.1rem 0.35rem;
+            border-radius: 0.25rem;
+            color: #ffffff;
+        }
+
+        /* ==========================================================================
+           FOOTER
+           ========================================================================== */
+        .site-footer {
+            border-top: 1px solid var(--border);
+            padding: 2.25rem 0;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            background-color: rgba(11, 13, 17, 0.6);
+            margin-top: auto;
+        }
+
+        .footer-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            text-align: center;
+        }
+
+        @media (min-width: 640px) {
+            .footer-content {
+                flex-direction: row;
+                text-align: left;
+            }
+        }
+
+        .footer-author a {
+            color: var(--text-secondary);
+            text-decoration: underline;
+            text-underline-offset: 3px;
+            transition: color 0.15s ease;
+        }
+
+        .footer-author a:hover {
+            color: #ffffff;
+        }
+
+        .footer-links {
+            display: inline-flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .footer-link {
+            color: var(--text-secondary);
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            transition: color 0.15s ease;
+        }
+
+        .footer-link:hover {
+            color: #ffffff;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- Accesibilidad: Salto al contenido -->
+    <a href="#main-content" class="skip-link">Saltar al contenido principal</a>
+
+    <!-- Cabecera -->
+    <header class="site-header" role="banner">
+        <div class="container header-content">
+            <a href="#" class="brand-link" aria-label="WinLock - Página de inicio">
+                <img src="winlock.ico" alt="Icono de WinLock" class="brand-icon" onerror="this.style.display='none'">
+                <span class="brand-title">WinLock</span>
+                <span id="navVersion" class="version-badge">v0.7</span>
             </a>
-            
-            <nav class="flex items-center gap-5 text-sm" aria-label="Navegación principal">
-                <a href="#como-funciona" class="text-brand-muted hover:text-zinc-200 transition-colors hidden sm:inline-block">Cómo funciona</a>
-                <a href="https://github.com/enderhacker/WinLock" target="_blank" rel="noopener noreferrer" class="text-brand-muted hover:text-zinc-200 transition-colors flex items-center gap-1.5">
-                    <svg class="w-4 h-4 fill-current" viewBox="0 0 16 16" aria-hidden="true">
-                        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
-                    </svg>
-                    <span>Repositorio</span>
+
+            <nav class="nav-links" aria-label="Enlaces del proyecto">
+                <a href="https://github.com/enderhacker/WinLock" target="_blank" rel="noopener noreferrer"
+                    class="nav-link" aria-label="Ver código fuente en GitHub (se abre en nueva pestaña)">
+                    <i class="fa-brands fa-github" aria-hidden="true"></i>
+                    <span>GitHub</span>
                 </a>
-                <a href="https://labdigital.es" target="_blank" rel="noopener noreferrer" class="text-brand-muted hover:text-zinc-200 transition-colors hidden sm:inline-block">LabDigital</a>
             </nav>
         </div>
     </header>
 
-    <main class="flex-grow">
-        <!-- Hero Principal -->
-        <section class="max-w-6xl mx-auto px-4 sm:px-6 pt-14 pb-8 sm:pt-20 sm:pb-12" aria-labelledby="hero-heading">
-            <div class="max-w-3xl">
-                <h1 id="hero-heading" class="text-3xl sm:text-5xl font-bold tracking-tight text-white leading-[1.15]">
-                    Bloquea la pantalla de tu ordenador sin suspender Windows ni cortar tus tareas.
-                </h1>
-                <p class="mt-5 text-base sm:text-lg text-zinc-400 leading-relaxed max-w-2xl">
-                    Diseñado para cuando te levantas de tu puesto pero necesitas dejar renders, exportaciones de vídeo, descargas o copias de seguridad en marcha sin miradas curiosas.
-                </p>
+    <!-- Contenido Principal -->
+    <main id="main-content" class="main-content">
 
-                <!-- Llamada a la acción -->
-                <div class="mt-8 flex flex-wrap items-center gap-4">
-                    <a id="btnDownload" href="https://github.com/enderhacker/WinLock/releases/latest"
-                       class="inline-flex items-center gap-2.5 px-6 py-3 rounded-lg bg-white text-zinc-950 font-semibold text-sm hover:bg-zinc-200 focus-visible:outline-2 focus-visible:outline-white transition-all shadow-md active:scale-95">
-                        <svg class="w-4 h-4 stroke-zinc-950 stroke-2 fill-none" viewBox="0 0 24 24" aria-hidden="true">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-                        </svg>
-                        <span id="btnDownloadLabel">Descargar WinLock</span>
-                    </a>
+        <!-- Hero -->
+        <section class="container hero-section" aria-labelledby="hero-title">
+            <h1 id="hero-title" class="hero-title">
+                Bloquea tu pantalla sin pausar lo que estés haciendo.
+            </h1>
 
-                    <div class="flex items-center gap-2 text-xs font-mono text-brand-muted">
-                        <span id="fileSizeLabel">Cargando datos...</span>
-                        <span>•</span>
-                        <span>Windows 10 / 11 (64-bit)</span>
-                    </div>
+            <p class="hero-desc">
+                Diseñado para cuando te levantas de tu puesto pero necesitas dejar renders, exportaciones de vídeo,
+                descargas o copias de seguridad en marcha sin miradas curiosas.
+            </p>
+
+            <div class="cta-container">
+                <a id="btnDownload" href="https://github.com/enderhacker/WinLock/releases/latest" class="btn-download"
+                    aria-label="Descargar la última versión de WinLock">
+                    <i class="fa-solid fa-download" aria-hidden="true"></i>
+                    <span id="btnDownloadLabel">Descargar WinLock</span>
+                </a>
+
+                <div class="btn-meta">
+                    <i class="fa-brands fa-windows" aria-hidden="true"></i>
+                    <span id="fileSizeLabel">--.-- MB • Windows 10 / 11</span>
                 </div>
             </div>
         </section>
 
-        <!-- Previsualización Dual Monitor (Exactamente Mismo Tamaño y Proporción) -->
-        <section class="max-w-6xl mx-auto px-4 sm:px-6 py-6" aria-label="Simulación de monitores de WinLock">
-            <div class="mb-3 flex items-center justify-between text-xs text-brand-muted font-mono">
-                <span class="flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
-                    Simulación de bloqueo multimonitor real
-                </span>
-                <span class="hidden sm:inline">Detección nativa de coordenadas (DPI-Aware)</span>
-            </div>
+        <!-- Puntos Clave (Sin tecnicismos) -->
+        <section class="container features-section" aria-label="Ventajas principales de WinLock">
+            <div class="features-grid">
 
-            <!-- Contenedor Doble Pantalla: Mismo tamaño simétrico en grid de 2 columnas -->
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 items-stretch">
-                
-                <!-- MONITOR 1: Pantalla Principal -->
-                <article class="flex flex-col rounded-2xl border border-brand-border bg-brand-surface p-2.5 sm:p-3 shadow-2xl">
-                    <div class="px-3 py-1.5 flex items-center justify-between text-xs text-brand-muted font-mono border-b border-brand-border/60 mb-2">
-                        <span class="flex items-center gap-2 text-zinc-300">
-                            <svg class="w-3.5 h-3.5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-                            Monitor 1 (Principal)
-                        </span>
-                        <span>Desbloqueo interactivo</span>
-                    </div>
-
-                    <!-- Marco de pantalla interactiva (aspect-ratio 16/10 estándar) -->
-                    <div class="w-full aspect-[16/10] bg-[#1c1c1c] rounded-lg p-4 sm:p-6 flex flex-col justify-between items-center text-center relative select-none overflow-hidden border border-zinc-800">
-                        <div class="w-full flex justify-between items-center text-[10px] sm:text-xs text-zinc-500 font-sans">
-                            <span>WinLock v0.7 - LabDigital</span>
-                            <span class="text-zinc-600">ID: Screen_0</span>
-                        </div>
-
-                        <div class="my-auto flex flex-col items-center w-full">
-                            <h2 class="text-xl sm:text-2xl font-black tracking-tight text-white font-sans leading-none">WinLock</h2>
-                            
-                            <!-- Reloj con hora actual local -->
-                            <div id="liveClock" class="text-4xl sm:text-5xl lg:text-6xl font-extralight text-white tracking-tight mt-2 font-sans">--:--</div>
-                            <div id="liveDate" class="text-[11px] sm:text-xs text-zinc-400 capitalize mt-0.5">Cargando fecha...</div>
-                            <div id="liveTimer" class="text-[10px] sm:text-xs text-zinc-500 font-mono mt-1">Tiempo bloqueado: 0h 14m 23s</div>
-
-                            <!-- Entrada simulada de contraseña -->
-                            <div class="w-full max-w-[200px] sm:max-w-[240px] mt-3 sm:mt-4">
-                                <label for="simulatedPass" class="block text-[10px] sm:text-[11px] text-zinc-400 mb-1">Contraseña:</label>
-                                <input id="simulatedPass" type="password" readonly value="password" aria-label="Campo de contraseña"
-                                       class="w-full bg-[#1e1e1e] border border-zinc-700/80 rounded px-2 py-1 text-center text-white tracking-[0.3em] text-sm focus:outline-none cursor-default" />
-                            </div>
-
-                            <!-- Nota del propietario visible -->
-                            <div class="w-full max-w-[280px] sm:max-w-[340px] bg-[#252525] border border-zinc-700/60 rounded-md p-2 sm:p-2.5 mt-3 text-left">
-                                <span class="block text-[10px] font-semibold text-zinc-200">Mensaje del propietario:</span>
-                                <p class="text-[10px] sm:text-[11px] text-zinc-400 mt-0.5 leading-snug">
-                                    "Renderizando escena en Blender y subiendo backup. Vuelvo sobre las 17:30. Por favor, no apagar el equipo."
-                                </p>
-                            </div>
-                        </div>
-
-                        <div class="text-[9px] sm:text-[10px] text-zinc-600">
-                            Este equipo ha sido bloqueado con WinLock.
-                        </div>
-                    </div>
+                <article class="feature-card">
+                    <h2 class="feature-title">Tu PC no se duerme</h2>
+                    <p class="feature-text">
+                        A diferencia del bloqueo estándar de Windows, WinLock impide que el equipo entre en suspensión o
+                        apague los discos. Tus programas continuarán procesando al 100%.
+                    </p>
                 </article>
 
-                <!-- MONITOR 2: Pantalla Secundaria (Mismo tamaño exacto: aspect-[16/10]) -->
-                <article class="flex flex-col rounded-2xl border border-brand-border bg-brand-surface p-2.5 sm:p-3 shadow-2xl">
-                    <div class="px-3 py-1.5 flex items-center justify-between text-xs text-brand-muted font-mono border-b border-brand-border/60 mb-2">
-                        <span class="flex items-center gap-2 text-zinc-300">
-                            <svg class="w-3.5 h-3.5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-                            Monitor 2 (Secundario)
-                        </span>
-                        <span class="text-zinc-500">Escudo protector ciego</span>
-                    </div>
+                <article class="feature-card">
+                    <h2 class="feature-title">Cubre todos tus monitores</h2>
+                    <p class="feature-text">
+                        Si trabajas con varias pantallas, WinLock las oscurece todas a la vez. Solo la pantalla
+                        principal mostrará el campo seguro para introducir tu contraseña.
+                    </p>
+                </article>
 
-                    <!-- Marco de pantalla idéntico en escala y proporción al Monitor 1 -->
-                    <div class="w-full aspect-[16/10] bg-[#0a0a0a] rounded-lg p-4 sm:p-6 flex flex-col justify-between items-center text-center relative select-none overflow-hidden border border-zinc-900">
-                        <div class="w-full flex justify-between items-center text-[10px] sm:text-xs text-zinc-600 font-sans">
-                            <span>WinLock Guard</span>
-                            <span class="text-zinc-700">ID: Screen_1</span>
-                        </div>
-
-                        <!-- Estado apagado/seguro del monitor secundario -->
-                        <div class="my-auto flex flex-col items-center text-zinc-600">
-                            <div class="w-10 h-10 sm:w-12 sm:h-12 rounded-full border border-zinc-800/80 bg-zinc-900/60 flex items-center justify-center mb-3">
-                                <svg class="w-5 h-5 sm:w-6 sm:h-6 text-zinc-500 stroke-[1.5]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
-                                </svg>
-                            </div>
-                            <h3 class="text-sm sm:text-base font-medium text-zinc-400 font-sans">WinLock - Pantalla protegida</h3>
-                            <p class="text-[11px] sm:text-xs text-zinc-600 mt-1 max-w-[240px] leading-relaxed">
-                                Superficie secundaria oscurecida para evitar lecturas indiscretas y ocultar el cursor.
-                            </p>
-                        </div>
-
-                        <div class="text-[9px] sm:text-[10px] text-zinc-700 font-mono">
-                            Modo pasivo activado
-                        </div>
-                    </div>
+                <article class="feature-card">
+                    <h2 class="feature-title">Deja una nota visible</h2>
+                    <p class="feature-text">
+                        Añade un mensaje informativo en pantalla (por ejemplo: <em>"Exportando proyecto, vuelvo a las
+                            18:00"</em>) para evitar que compañeros de trabajo apaguen tu equipo por descuido.
+                    </p>
                 </article>
 
             </div>
         </section>
 
-        <!-- Bloque de Características Reales (Técnicas y Directas) -->
-        <section class="max-w-6xl mx-auto px-4 sm:px-6 py-16" aria-labelledby="features-heading">
-            <h2 id="features-heading" class="text-xl font-bold tracking-tight text-white mb-6">
-                Qué hace exactamente WinLock
-            </h2>
+        <!-- Instrucciones en 3 Pasos -->
+        <section class="container steps-section" aria-labelledby="steps-title">
+            <div class="section-header">
+                <h2 id="steps-title" class="section-title">¿Cómo se usa?</h2>
+            </div>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div class="p-5 rounded-xl border border-brand-border bg-brand-surface">
-                    <h3 class="font-semibold text-zinc-200 text-sm">Anti-Suspensión Activo</h3>
-                    <p class="mt-2 text-xs text-zinc-400 leading-relaxed">
-                        Llama a las APIs del núcleo de Windows (<code class="text-zinc-300 font-mono text-[11px]">SetThreadExecutionState</code>) para evitar que el ordenador entre en suspensión o apague los discos.
+            <div class="steps-grid">
+                <div class="step-item">
+                    <span class="step-badge">
+                        <i class="fa-solid fa-circle-down" aria-hidden="true"></i>
+                        <span>Paso 01</span>
+                    </span>
+                    <h3 class="step-heading">Abre el ejecutable</h3>
+                    <p class="step-text">
+                        Descarga el archivo <code class="step-code">WinLock.exe</code> y ábrelo. Es totalmente autónomo
+                        y no requiere privilegios de instalador.
                     </p>
                 </div>
 
-                <div class="p-5 rounded-xl border border-brand-border bg-brand-surface">
-                    <h3 class="font-semibold text-zinc-200 text-sm">Multimonitor Real</h3>
-                    <p class="mt-2 text-xs text-zinc-400 leading-relaxed">
-                        Enumera cada pantalla conectada mediante la API de Win32. Bloquea monitores secundarios con pantallas protectoras independientes respetando el escalado DPI.
+                <div class="step-item">
+                    <span class="step-badge">
+                        <i class="fa-solid fa-key" aria-hidden="true"></i>
+                        <span>Paso 02</span>
+                    </span>
+                    <h3 class="step-heading">Define tu clave temporal</h3>
+                    <p class="step-text">
+                        Introduce la clave temporal que utilizarás para desbloquear y, si quieres, escribe un mensaje
+                        visible para los demás.
                     </p>
                 </div>
 
-                <div class="p-5 rounded-xl border border-brand-border bg-brand-surface">
-                    <h3 class="font-semibold text-zinc-200 text-sm">Bloqueo de Atajos y Cursor</h3>
-                    <p class="mt-2 text-xs text-zinc-400 leading-relaxed">
-                        Atrapa y oculta el cursor del ratón, y un hilo vigilante impide abrir herramientas como el Administrador de tareas, CMD, PowerShell o combinaciones de teclas.
-                    </p>
-                </div>
-
-                <div class="p-5 rounded-xl border border-brand-border bg-brand-surface">
-                    <h3 class="font-semibold text-zinc-200 text-sm">Portabilidad y Limpieza</h3>
-                    <p class="mt-2 text-xs text-zinc-400 leading-relaxed">
-                        No requiere instalación, no agrega servicios al inicio ni modifica el registro del sistema. Incluye comprobación y descarga automática de actualizaciones.
+                <div class="step-item">
+                    <span class="step-badge">
+                        <i class="fa-solid fa-lock-open" aria-hidden="true"></i>
+                        <span>Paso 03</span>
+                    </span>
+                    <h3 class="step-heading">Desbloquea al regresar</h3>
+                    <p class="step-text">
+                        Teclea tu clave y pulsa Enter. Tu escritorio, ratón y ventanas se restaurarán al instante
+                        exactamente como los dejaste.
                     </p>
                 </div>
             </div>
         </section>
 
-        <!-- Instrucciones directas de uso -->
-        <section id="como-funciona" class="max-w-6xl mx-auto px-4 sm:px-6 pb-20 border-t border-brand-border/60 pt-12" aria-labelledby="steps-heading">
-            <h2 id="steps-heading" class="text-xs font-mono uppercase tracking-wider text-brand-muted mb-6">Instrucciones de uso</h2>
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 text-sm">
-                <div class="border-l-2 border-brand-border pl-4">
-                    <span class="text-zinc-500 font-mono text-xs">Paso 01</span>
-                    <h3 class="text-zinc-200 font-medium text-sm mt-1">Abre el ejecutable</h3>
-                    <p class="text-zinc-400 text-xs mt-1 leading-relaxed">Descarga el archivo <code class="text-zinc-300 font-mono">WinLock.exe</code> y ejecútalo. No requiere instalación previa.</p>
-                </div>
-                <div class="border-l-2 border-brand-border pl-4">
-                    <span class="text-zinc-500 font-mono text-xs">Paso 02</span>
-                    <h3 class="text-zinc-200 font-medium text-sm mt-1">Configura la clave temporal</h3>
-                    <p class="text-zinc-400 text-xs mt-1 leading-relaxed">Introduce la contraseña que usarás para desbloquear y, si lo deseas, añade una nota informativa para tus compañeros.</p>
-                </div>
-                <div class="border-l-2 border-brand-border pl-4">
-                    <span class="text-zinc-500 font-mono text-xs">Paso 03</span>
-                    <h3 class="text-zinc-200 font-medium text-sm mt-1">Desbloquea al volver</h3>
-                    <p class="text-zinc-400 text-xs mt-1 leading-relaxed">Cuando regreses, teclea directamente tu contraseña y pulsa Enter. El explorador y el cursor se restaurarán al instante.</p>
-                </div>
-            </div>
-        </section>
     </main>
 
     <!-- Pie de página -->
-    <footer class="border-t border-brand-border py-8 text-xs text-brand-muted bg-brand-surface/40">
-        <div class="max-w-6xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row justify-between items-center gap-4">
-            <p>WinLock — Desarrollado por Jaime Muñiz García (<a href="https://labdigital.es" target="_blank" rel="noopener noreferrer" class="hover:text-zinc-300 underline underline-offset-4">LabDigital</a>).</p>
-            <div class="flex items-center gap-4 font-mono">
-                <a href="https://github.com/enderhacker/WinLock" target="_blank" rel="noopener noreferrer" class="hover:text-zinc-300 transition-colors">Código abierto en GitHub</a>
+    <footer class="site-footer" role="contentinfo">
+        <div class="container footer-content">
+            <p class="footer-author">
+                WinLock — Desarrollado por Jaime Muñiz García (<a href="https://labdigital.es" target="_blank"
+                    rel="noopener noreferrer">LabDigital</a>)
+            </p>
+            <div class="footer-links">
+                <a href="https://github.com/enderhacker/WinLock" target="_blank" rel="noopener noreferrer"
+                    class="footer-link">
+                    <i class="fa-brands fa-github" aria-hidden="true"></i>
+                    <span>Repositorio</span>
+                </a>
                 <span>•</span>
-                <span>Licencia libre</span>
+                <span>Licencia MIT / Libre</span>
             </div>
         </div>
     </footer>
 
-    <!-- Lógica JavaScript Dinámica y Conexión de Releases -->
+    <!-- Detección asíncrona de releases y versiones -->
     <script>
-        // 1. Reloj en tiempo real adaptado a España / Castellano
-        function updateDisplayTime() {
-            const now = new Date();
-            const hours = String(now.getHours()).padStart(2, '0');
-            const minutes = String(now.getMinutes()).padStart(2, '0');
-            const liveClock = document.getElementById('liveClock');
-            if (liveClock) liveClock.textContent = `${hours}:${minutes}`;
-
-            const liveDate = document.getElementById('liveDate');
-            if (liveDate) {
-                const dateOptions = { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' };
-                const formattedDate = now.toLocaleDateString('es-ES', dateOptions);
-                liveDate.textContent = formattedDate.charAt(0).toUpperCase() + formattedDate.slice(1);
-            }
-        }
-        setInterval(updateDisplayTime, 1000);
-        updateDisplayTime();
-
-        // 2. Cronómetro simulado de tiempo de bloqueo
-        let elapsedSeconds = 863; // ~14m 23s
-        setInterval(() => {
-            elapsedSeconds++;
-            const h = Math.floor(elapsedSeconds / 3600);
-            const m = Math.floor((elapsedSeconds % 3600) / 60);
-            const s = elapsedSeconds % 60;
-            const timerElement = document.getElementById('liveTimer');
-            if (timerElement) {
-                timerElement.textContent = `Tiempo bloqueado: ${h}h ${m}m ${s}s`;
-            }
-        }, 1000);
-
-        // 3. Consulta asíncrona de actualización a GitHub (version.json)
         async function fetchAppRelease() {
             const VERSION_URL = "https://raw.githubusercontent.com/enderhacker/WinLock/refs/heads/main/version.json";
             const downloadBtn = document.getElementById('btnDownload');
@@ -349,9 +680,9 @@
             const fileSizeLabel = document.getElementById('fileSizeLabel');
 
             try {
-                const response = await fetch(VERSION_URL, { cache: 'no-cache' });
-                if (!response.ok) throw new Error('Respuesta de red no válida');
-                
+                const response = await fetch(VERSION_URL, {cache: 'no-cache'});
+                if (!response.ok) throw new Error('Error de conexión');
+
                 const data = await response.json();
                 const version = data.tag_name || 'v0.7';
                 const downloadUrl = data.download_url;
@@ -359,19 +690,20 @@
 
                 if (navVersion) navVersion.textContent = version;
                 if (downloadLabel) downloadLabel.textContent = `Descargar WinLock (${version})`;
-                if (fileSizeLabel) fileSizeLabel.textContent = `${size} • WinLock.exe`;
+                if (fileSizeLabel) fileSizeLabel.textContent = `${size} • Windows 10 / 11`;
                 if (downloadUrl && downloadBtn) {
                     downloadBtn.href = downloadUrl;
                 }
             } catch (err) {
-                // Fallback en caso de desconexión o fallo de API
+                // Fallback seguro en caso de fallo de red
                 if (downloadBtn) downloadBtn.href = "https://github.com/enderhacker/WinLock/releases/latest";
-                if (downloadLabel) downloadLabel.textContent = "Descargar WinLock.exe";
-                if (fileSizeLabel) fileSizeLabel.textContent = "Portable • Sin instalación";
+                if (downloadLabel) downloadLabel.textContent = "Descargar WinLock";
+                if (fileSizeLabel) fileSizeLabel.textContent = "--.-- MB • Windows 10 / 11";
             }
         }
 
         fetchAppRelease();
     </script>
 </body>
+
 </html>
