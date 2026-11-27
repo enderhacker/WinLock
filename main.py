@@ -3,49 +3,20 @@ LOCAL_VERSION = "v0.9"
 import sys
 
 try:
-    import psutil
-    import subprocess
-    import tkinter as tk
-    from tkinter import ttk, messagebox
-    import time
-    import math
-    import random
     import ctypes
     import ctypes.wintypes
-    import keyboard
-    import os
-    import threading
-    import queue
-    import json
-    import hmac
-    import uuid
-    import winreg
-    import atexit
-    import urllib.request
-    import urllib.error
-    import webbrowser
-    import locale
     import hashlib
-    import struct
-    import shutil
-    import tempfile
-    import re
-    from datetime import datetime
+    import json
+    import os
+    import subprocess
+    import threading
+    import time
+    import tkinter as tk
+    from tkinter import messagebox, ttk
+    import urllib.request
+    import winreg
 except ImportError as e:
     print(f"Faltan bibliotecas necesarias: {e}", file=sys.stderr)
-    try:
-        import tkinter as _tk
-        from tkinter import messagebox as _mb
-
-        _root = _tk.Tk()
-        _root.withdraw()
-        _mb.showerror(
-            "Instalación fallida - WinLock",
-            f"Faltan bibliotecas necesarias ({e.name}). Reinstala la aplicación.",
-        )
-        _root.destroy()
-    except Exception:
-        pass
     sys.exit(1)
 
 # Windows DPI Awareness para mapeo exacto de píxeles en multi-monitor
@@ -60,12 +31,15 @@ except Exception:
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+shell32 = ctypes.WinDLL("shell32", use_last_error=True)
 try:
     powrprof = ctypes.WinDLL("powrprof", use_last_error=True)
 except Exception:
     powrprof = None
 
 LRESULT = ctypes.c_ssize_t
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
 HOOKPROC = ctypes.WINFUNCTYPE(
     LRESULT, ctypes.c_int, ctypes.wintypes.WPARAM, ctypes.wintypes.LPARAM
 )
@@ -77,6 +51,13 @@ WNDPROC = ctypes.WINFUNCTYPE(
     ctypes.wintypes.HWND,
     ctypes.c_uint,
     ctypes.wintypes.WPARAM,
+    ctypes.wintypes.LPARAM,
+)
+MONITORENUMPROC = ctypes.WINFUNCTYPE(
+    ctypes.wintypes.BOOL,
+    ctypes.wintypes.HMONITOR,
+    ctypes.wintypes.HDC,
+    ctypes.POINTER(ctypes.wintypes.RECT),
     ctypes.wintypes.LPARAM,
 )
 
@@ -91,10 +72,46 @@ class GUID(ctypes.Structure):
 
     @classmethod
     def from_string(cls, guid_str):
-        return cls.from_buffer_copy(uuid.UUID(guid_str).bytes_le)
+        parts = guid_str.strip().strip("{}").split("-")
+        d4 = bytes.fromhex(parts[3] + parts[4])
+        return cls(
+            int(parts[0], 16),
+            int(parts[1], 16),
+            int(parts[2], 16),
+            (ctypes.c_ubyte * 8)(*d4),
+        )
 
     def to_string(self):
-        return str(uuid.UUID(bytes_le=bytes(self)))
+        d4 = bytes(self.Data4)
+        return (
+            f"{self.Data1:08x}-{self.Data2:04x}-{self.Data3:04x}-"
+            f"{d4[:2].hex()}-{d4[2:].hex()}"
+        )
+
+
+class PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", ctypes.wintypes.DWORD),
+        ("cntUsage", ctypes.wintypes.DWORD),
+        ("th32ProcessID", ctypes.wintypes.DWORD),
+        ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", ctypes.wintypes.DWORD),
+        ("cntThreads", ctypes.wintypes.DWORD),
+        ("th32ParentProcessID", ctypes.wintypes.DWORD),
+        ("pcPriClassBase", ctypes.c_long),
+        ("dwFlags", ctypes.wintypes.DWORD),
+        ("szExeFile", ctypes.c_wchar * 260),
+    ]
+
+
+class KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ("vkCode", ctypes.wintypes.DWORD),
+        ("scanCode", ctypes.wintypes.DWORD),
+        ("flags", ctypes.wintypes.DWORD),
+        ("time", ctypes.wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
 
 
 # Firmas explícitas de Win32 API (seguras en 32-bit y 64-bit)
@@ -114,12 +131,8 @@ user32.CallWindowProcW.restype = LRESULT
 user32.GetKeyboardLayout.argtypes = [ctypes.wintypes.DWORD]
 user32.GetKeyboardLayout.restype = ctypes.wintypes.HKL
 
-user32.MapVirtualKeyExW.argtypes = [
-    ctypes.c_uint,
-    ctypes.c_uint,
-    ctypes.wintypes.HKL,
-]
-user32.MapVirtualKeyExW.restype = ctypes.c_uint
+user32.GetKeyState.argtypes = [ctypes.c_int]
+user32.GetKeyState.restype = ctypes.c_short
 
 user32.ToUnicodeEx.argtypes = [
     ctypes.c_uint,
@@ -161,6 +174,17 @@ user32.GetParent.restype = ctypes.wintypes.HWND
 user32.EnumWindows.argtypes = [WNDENUMPROC, ctypes.wintypes.LPARAM]
 user32.EnumWindows.restype = ctypes.wintypes.BOOL
 
+user32.EnumDisplayMonitors.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    MONITORENUMPROC,
+    ctypes.wintypes.LPARAM,
+]
+user32.EnumDisplayMonitors.restype = ctypes.wintypes.BOOL
+
+user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+user32.GetSystemMetrics.restype = ctypes.c_int
+
 user32.GetClassNameW.argtypes = [
     ctypes.wintypes.HWND,
     ctypes.wintypes.LPWSTR,
@@ -176,6 +200,15 @@ user32.EnableWindow.restype = ctypes.wintypes.BOOL
 
 user32.IsWindowVisible.argtypes = [ctypes.wintypes.HWND]
 user32.IsWindowVisible.restype = ctypes.wintypes.BOOL
+
+user32.ShowCursor.argtypes = [ctypes.wintypes.BOOL]
+user32.ShowCursor.restype = ctypes.c_int
+
+user32.ClipCursor.argtypes = [ctypes.POINTER(ctypes.wintypes.RECT)]
+user32.ClipCursor.restype = ctypes.wintypes.BOOL
+
+user32.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+user32.SetCursorPos.restype = ctypes.wintypes.BOOL
 
 user32.ShutdownBlockReasonCreate.argtypes = [
     ctypes.wintypes.HWND,
@@ -272,8 +305,77 @@ kernel32.SetProcessShutdownParameters.restype = ctypes.wintypes.BOOL
 kernel32.LocalFree.argtypes = [ctypes.c_void_p]
 kernel32.LocalFree.restype = ctypes.c_void_p
 
+kernel32.GetTempPathW.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.LPWSTR]
+kernel32.GetTempPathW.restype = ctypes.wintypes.DWORD
+
+kernel32.GetDiskFreeSpaceExW.argtypes = [
+    ctypes.wintypes.LPCWSTR,
+    ctypes.POINTER(ctypes.c_ulonglong),
+    ctypes.POINTER(ctypes.c_ulonglong),
+    ctypes.POINTER(ctypes.c_ulonglong),
+]
+kernel32.GetDiskFreeSpaceExW.restype = ctypes.wintypes.BOOL
+
+kernel32.CreateToolhelp32Snapshot.argtypes = [
+    ctypes.wintypes.DWORD,
+    ctypes.wintypes.DWORD,
+]
+kernel32.CreateToolhelp32Snapshot.restype = ctypes.wintypes.HANDLE
+
+kernel32.Process32FirstW.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.POINTER(PROCESSENTRY32W),
+]
+kernel32.Process32FirstW.restype = ctypes.wintypes.BOOL
+
+kernel32.Process32NextW.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.POINTER(PROCESSENTRY32W),
+]
+kernel32.Process32NextW.restype = ctypes.wintypes.BOOL
+
+kernel32.OpenProcess.argtypes = [
+    ctypes.wintypes.DWORD,
+    ctypes.wintypes.BOOL,
+    ctypes.wintypes.DWORD,
+]
+kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
+
+kernel32.TerminateProcess.argtypes = [ctypes.wintypes.HANDLE, ctypes.c_uint]
+kernel32.TerminateProcess.restype = ctypes.wintypes.BOOL
+
+kernel32.GetProcessTimes.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.POINTER(ctypes.wintypes.FILETIME),
+    ctypes.POINTER(ctypes.wintypes.FILETIME),
+    ctypes.POINTER(ctypes.wintypes.FILETIME),
+    ctypes.POINTER(ctypes.wintypes.FILETIME),
+]
+kernel32.GetProcessTimes.restype = ctypes.wintypes.BOOL
+
+kernel32.QueryFullProcessImageNameW.argtypes = [
+    ctypes.wintypes.HANDLE,
+    ctypes.wintypes.DWORD,
+    ctypes.wintypes.LPWSTR,
+    ctypes.POINTER(ctypes.wintypes.DWORD),
+]
+kernel32.QueryFullProcessImageNameW.restype = ctypes.wintypes.BOOL
+
 advapi32.AbortSystemShutdownW.argtypes = [ctypes.wintypes.LPCWSTR]
 advapi32.AbortSystemShutdownW.restype = ctypes.wintypes.BOOL
+
+shell32.IsUserAnAdmin.argtypes = []
+shell32.IsUserAnAdmin.restype = ctypes.wintypes.BOOL
+
+shell32.ShellExecuteW.argtypes = [
+    ctypes.wintypes.HWND,
+    ctypes.wintypes.LPCWSTR,
+    ctypes.wintypes.LPCWSTR,
+    ctypes.wintypes.LPCWSTR,
+    ctypes.wintypes.LPCWSTR,
+    ctypes.c_int,
+]
+shell32.ShellExecuteW.restype = ctypes.c_ssize_t
 
 if powrprof is not None:
     powrprof.PowerGetActiveScheme.argtypes = [
@@ -330,15 +432,58 @@ SWP_NOMOVE = 0x0002
 SWP_NOSIZE = 0x0001
 SWP_SHOWWINDOW = 0x0040
 SW_HIDE = 0
+SW_SHOWNORMAL = 1
 SW_SHOW = 5
 GWLP_WNDPROC = -4
 WM_CLOSE = 0x0010
 WM_QUERYENDSESSION = 0x0011
 WM_ENDSESSION = 0x0016
 WM_SETTINGCHANGE = 0x001A
+WM_KEYDOWN = 0x0100
+WM_KEYUP = 0x0101
+WM_SYSKEYDOWN = 0x0104
+WM_SYSKEYUP = 0x0105
 WM_SYSCOMMAND = 0x0112
 SMTO_ABORTIFHUNG = 0x0002
 ERROR_ALREADY_EXISTS = 183
+
+TH32CS_SNAPPROCESS = 0x00000002
+PROCESS_TERMINATE = 0x0001
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+LLKHF_EXTENDED = 0x01
+
+VK_BACK = 0x08
+VK_RETURN = 0x0D
+VK_SHIFT = 0x10
+VK_CONTROL = 0x11
+VK_MENU = 0x12
+VK_CAPITAL = 0x14
+VK_ESCAPE = 0x1B
+VK_SPACE = 0x20
+VK_LSHIFT = 0xA0
+VK_RSHIFT = 0xA1
+VK_LCONTROL = 0xA2
+VK_RCONTROL = 0xA3
+VK_LMENU = 0xA4
+VK_RMENU = 0xA5
+
+BLOCKED_VK_CODES = {
+    0x09,  # TAB
+    0x13,  # PAUSE
+    0x21, 0x22, 0x23, 0x24,  # PGUP, PGDN, END, HOME
+    0x25, 0x26, 0x27, 0x28,  # ARROWS
+    0x2C, 0x2D, 0x2E,        # PRINTSCREEN, INSERT, DELETE
+    0x5B, 0x5C, 0x5D, 0x5F,  # LWIN, RWIN, APPS, SLEEP
+    0x90, 0x91,              # NUMLOCK, SCROLLLOCK
+    *range(0x70, 0x88),      # F1-F24
+    *range(0xA6, 0xB8),      # Browser/Media/Volume/Launch keys
+}
+
+NUMPAD_VK_CHARS = {
+    0x60: "0", 0x61: "1", 0x62: "2", 0x63: "3", 0x64: "4",
+    0x65: "5", 0x66: "6", 0x67: "7", 0x68: "8", 0x69: "9",
+    0x6A: "*", 0x6B: "+", 0x6D: "-", 0x6E: ".", 0x6F: "/",
+}
 
 BLOCKED_SYSCOMMANDS = {
     0xF010,  # SC_MOVE
@@ -355,14 +500,40 @@ CREATE_NEW_PROCESS_GROUP = 0x00000200
 DETACHED_PROCESS = 0x00000008
 CREATE_NO_WINDOW = 0x08000000
 LOG_FOLDER_NAME = "WinLock"
-LOG_FILE_NAME = f"logs-{datetime.now().strftime('%d_%m_%Y-%H_%M_%S')}.txt"
+LOG_FILE_NAME = f"logs-{time.strftime('%d_%m_%Y-%H_%M_%S')}.txt"
 LATEST_VERSION_JSON = (
     "https://raw.githubusercontent.com/enderhacker/WinLock/refs/heads/main/version.json"
 )
 UPDATE_URL = "https://winlock.labdigital.es"
 UPDATE_STAGING_PREFIX = "WinLock_Update_"
 
+_ES_WEEKDAYS = (
+    "Lunes",
+    "Martes",
+    "Miércoles",
+    "Jueves",
+    "Viernes",
+    "Sábado",
+    "Domingo",
+)
+_ES_MONTHS = (
+    "",
+    "enero",
+    "febrero",
+    "marzo",
+    "abril",
+    "mayo",
+    "junio",
+    "julio",
+    "agosto",
+    "septiembre",
+    "octubre",
+    "noviembre",
+    "diciembre",
+)
+
 _single_instance_mutex_handle = None
+_active_input_blocker = None
 
 # GUIDs de botones de energía en Windows
 GUID_SYSTEM_BUTTON_SUBGROUP = "4f971e89-eebd-4455-a8de-9e59040e7347"
@@ -428,49 +599,172 @@ MENU_OVERLAY_PROCESSES = {
     "shellexperiencehost.exe",
 }
 
-BLOCKED_SPECIAL_KEYS = {
-    "left windows",
-    "right windows",
-    "apps",
-    "tab",
-    "home",
-    "end",
-    "insert",
-    "delete",
-    "page up",
-    "page down",
-    "print screen",
-    "scroll lock",
-    "pause",
-    "sleep",
-    "power",
-    "wake",
-    "f1",
-    "f2",
-    "f3",
-    "f4",
-    "f5",
-    "f6",
-    "f7",
-    "f8",
-    "f9",
-    "f10",
-    "f11",
-    "f12",
-    "up",
-    "down",
-    "left",
-    "right",
-    "num lock",
-}
 
+# ==============================================================================
+# UTILIDADES NATIVAS DE WINDOWS (SIN DEPENDENCIAS EXTERNAS)
+# ==============================================================================
 
 def is_admin():
     """Indica si la aplicación corre con privilegios de Administrador."""
     try:
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        return bool(shell32.IsUserAnAdmin())
     except Exception:
         return False
+
+
+def const_time_equals(a, b):
+    """Comparación en tiempo constante para contraseñas y hashes."""
+    ba = a.encode("utf-8") if isinstance(a, str) else bytes(a)
+    bb = b.encode("utf-8") if isinstance(b, str) else bytes(b)
+    diff = len(ba) ^ len(bb)
+    for x, y in zip(ba, bb):
+        diff |= x ^ y
+    return diff == 0
+
+
+def format_spanish_date(lt=None):
+    """Formatea la fecha en español sin depender de la configuración regional del SO."""
+    lt = lt or time.localtime()
+    return (
+        f"{_ES_WEEKDAYS[lt.tm_wday]}, {lt.tm_mday:02d} de "
+        f"{_ES_MONTHS[lt.tm_mon]} de {lt.tm_year}"
+    )
+
+
+def get_temp_dir():
+    """Obtiene la carpeta temporal de Windows mediante GetTempPathW."""
+    buf = ctypes.create_unicode_buffer(512)
+    n = kernel32.GetTempPathW(512, buf)
+    if 0 < n < 512:
+        return os.path.abspath(buf.value)
+    return os.path.abspath(os.environ.get("TEMP") or os.environ.get("TMP") or ".")
+
+
+def get_free_disk_bytes(path):
+    """Devuelve el espacio libre en bytes para la unidad de la ruta indicada."""
+    free_bytes = ctypes.c_ulonglong(0)
+    if kernel32.GetDiskFreeSpaceExW(str(path), ctypes.byref(free_bytes), None, None):
+        return free_bytes.value
+    return None
+
+
+def remove_tree(path, ignore_errors=False):
+    """Elimina recursivamente un directorio sin requerir shutil."""
+    if not os.path.exists(path):
+        return
+    for root_dir, dirs, files in os.walk(path, topdown=False):
+        for name in files:
+            fp = os.path.join(root_dir, name)
+            try:
+                os.chmod(fp, 0o666)
+                os.remove(fp)
+            except Exception:
+                if not ignore_errors:
+                    raise
+        for name in dirs:
+            dp = os.path.join(root_dir, name)
+            try:
+                os.rmdir(dp)
+            except Exception:
+                if not ignore_errors:
+                    raise
+    try:
+        os.rmdir(path)
+    except Exception:
+        if not ignore_errors:
+            raise
+
+
+def copy_file_bytes(src, dst):
+    """Copia un archivo por bloques de 64 KB."""
+    with open(src, "rb") as f_in, open(dst, "wb") as f_out:
+        while True:
+            chunk = f_in.read(65536)
+            if not chunk:
+                break
+            f_out.write(chunk)
+
+
+def find_in_path(exe_name):
+    """Busca un ejecutable en la variable de entorno PATH."""
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        if not directory:
+            continue
+        candidate = os.path.join(directory.strip('"'), exe_name)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def list_processes():
+    """Devuelve {pid: (nombre_lower, parent_pid)} usando Toolhelp32 nativo."""
+    procs = {}
+    snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if not snap or snap == INVALID_HANDLE_VALUE:
+        return procs
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        if kernel32.Process32FirstW(snap, ctypes.byref(entry)):
+            while True:
+                procs[entry.th32ProcessID] = (
+                    entry.szExeFile.lower(),
+                    entry.th32ParentProcessID,
+                )
+                if not kernel32.Process32NextW(snap, ctypes.byref(entry)):
+                    break
+    finally:
+        kernel32.CloseHandle(snap)
+    return procs
+
+
+def get_process_creation_time(pid):
+    """Devuelve la marca FILETIME de creación de un PID (o None si no accesible)."""
+    h_proc = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not h_proc:
+        return None
+    try:
+        ct = ctypes.wintypes.FILETIME()
+        et = ctypes.wintypes.FILETIME()
+        kt = ctypes.wintypes.FILETIME()
+        ut = ctypes.wintypes.FILETIME()
+        if kernel32.GetProcessTimes(
+            h_proc,
+            ctypes.byref(ct),
+            ctypes.byref(et),
+            ctypes.byref(kt),
+            ctypes.byref(ut),
+        ):
+            return (ct.dwHighDateTime << 32) | ct.dwLowDateTime
+    finally:
+        kernel32.CloseHandle(h_proc)
+    return None
+
+
+def get_process_exe_path(pid):
+    """Devuelve la ruta completa del ejecutable de un PID (o None si no accesible)."""
+    h_proc = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not h_proc:
+        return None
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        size = ctypes.wintypes.DWORD(1024)
+        if kernel32.QueryFullProcessImageNameW(h_proc, 0, buf, ctypes.byref(size)):
+            return buf.value
+    finally:
+        kernel32.CloseHandle(h_proc)
+    return None
+
+
+def terminate_process(pid):
+    """Termina un proceso por PID usando OpenProcess + TerminateProcess."""
+    h_proc = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
+    if not h_proc:
+        return False
+    try:
+        return bool(kernel32.TerminateProcess(h_proc, 1))
+    finally:
+        kernel32.CloseHandle(h_proc)
 
 
 def parse_version(version_str):
@@ -479,9 +773,15 @@ def parse_version(version_str):
         cleaned = str(version_str).strip().lstrip("vV")
         parts = []
         for seg in cleaned.split("."):
-            m = re.match(r"^(\d+)", seg.strip())
-            if m:
-                parts.append(int(m.group(1)))
+            seg = seg.strip()
+            digits = ""
+            for ch in seg:
+                if ch.isdigit():
+                    digits += ch
+                else:
+                    break
+            if digits:
+                parts.append(int(digits))
             else:
                 break
         while len(parts) > 1 and parts[-1] == 0:
@@ -497,12 +797,16 @@ def parse_human_size(size_value):
         return int(size_value)
     if not isinstance(size_value, str):
         return 0
-    m = re.match(r"^\s*([\d.,]+)\s*([KMGTP]?B?)\s*$", size_value.strip(), re.IGNORECASE)
-    if not m:
+    s = size_value.strip()
+    idx = 0
+    while idx < len(s) and (s[idx].isdigit() or s[idx] in ".,"):
+        idx += 1
+    num_str = s[:idx]
+    unit = s[idx:].strip().upper()
+    if not num_str:
         return 0
     try:
-        num = float(m.group(1).replace(",", "."))
-        unit = m.group(2).upper()
+        num = float(num_str.replace(",", "."))
         factors = {
             "": 1,
             "B": 1,
@@ -515,7 +819,9 @@ def parse_human_size(size_value):
             "T": 1024**4,
             "TB": 1024**4,
         }
-        return int(num * factors.get(unit, 1))
+        if unit not in factors:
+            return 0
+        return int(num * factors[unit])
     except Exception:
         return 0
 
@@ -567,10 +873,11 @@ except OSError:
 def write_log(message):
     """Escribe un mensaje detallado con timestamp en el archivo de logs."""
     try:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
-        log_entry = f"[{timestamp}] - {message}\n"
+        now = time.time()
+        ms = int((now % 1) * 1000)
+        timestamp = f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now))},{ms:03d}"
         with open(LOG_FILE_PATH, "a", encoding="utf-8") as log_file:
-            log_file.write(log_entry)
+            log_file.write(f"[{timestamp}] - {message}\n")
     except Exception as e:
         print(f"Error al escribir en el log: {e}", file=sys.stderr)
 
@@ -582,7 +889,7 @@ def resource_path(relative_path):
 
 
 def acquire_single_instance_mutex(retries=0, retry_delay=0.15):
-    """Evita múltiples instancias simultáneas de WinLock con soporte de reintento tras actualizar."""
+    """Evita múltiples instancias simultáneas de WinLock con soporte de reintento."""
     global _single_instance_mutex_handle
     for attempt in range(retries + 1):
         handle = kernel32.CreateMutexW(None, False, "Local\\WinLock_SingleInstance_Mutex")
@@ -608,6 +915,80 @@ def release_single_instance_mutex():
         except Exception:
             pass
         _single_instance_mutex_handle = None
+
+
+def relaunch_as_admin():
+    """Relanza WinLock con elevación UAC mediante ShellExecuteW ('runas')."""
+    is_frozen = bool(getattr(sys, "frozen", False))
+    exe_path = os.path.abspath(sys.executable)
+    forwarded_args = [a for a in sys.argv[1:] if a != "--elevated"]
+    forwarded_args.append("--elevated")
+
+    if is_frozen:
+        params = subprocess.list2cmdline(forwarded_args)
+        workdir = os.path.dirname(exe_path) or os.getcwd()
+    else:
+        script_path = os.path.abspath(__file__)
+        params = subprocess.list2cmdline([script_path] + forwarded_args)
+        workdir = os.path.dirname(script_path) or os.getcwd()
+
+    release_single_instance_mutex()
+
+    res = shell32.ShellExecuteW(
+        None,
+        "runas",
+        exe_path,
+        params,
+        workdir,
+        SW_SHOWNORMAL,
+    )
+    if res > 32:
+        write_log("Instancia elevada lanzada correctamente. Cerrando instancia actual.")
+        return True
+
+    write_log(
+        f"Auto-elevación cancelada o fallida (ShellExecuteW={res}). Continuando sin Administrador."
+    )
+    acquire_single_instance_mutex(retries=3, retry_delay=0.1)
+    return False
+
+
+def prompt_admin_elevation():
+    """
+    Si no se ejecuta como Administrador, muestra un modal recomendándolo y
+    ofrece auto-elevar con Sí / No. Devuelve True si este proceso debe salir.
+    """
+    if is_admin():
+        return False
+
+    modal_root = tk.Tk()
+    modal_root.withdraw()
+    try:
+        modal_root.iconbitmap(resource_path("winlock.ico"))
+    except Exception:
+        pass
+    modal_root.attributes("-topmost", True)
+
+    should_elevate = messagebox.askyesno(
+        f"Permisos de Administrador - WinLock {LOCAL_VERSION}",
+        "WinLock no se está ejecutando como Administrador.\n\n"
+        "Se recomienda ejecutarlo como Administrador para activar la máxima "
+        "protección (bloquear cambio de usuario, apagado y todas las políticas del sistema).\n\n"
+        "¿Desea reiniciar WinLock automáticamente como Administrador?",
+        icon="warning",
+        parent=modal_root,
+    )
+    try:
+        modal_root.destroy()
+    except Exception:
+        pass
+
+    if not should_elevate:
+        write_log("El usuario decidió continuar sin permisos de Administrador.")
+        return False
+
+    write_log("Solicitando auto-elevación como Administrador (UAC)...")
+    return relaunch_as_admin()
 
 
 def abort_system_shutdown():
@@ -648,8 +1029,7 @@ def start_explorer_if_not_running():
     """Verifica si explorer.exe se está ejecutando y lo inicia si no es así."""
     try:
         explorer_running = any(
-            (proc.info.get("name") or "").lower() == "explorer.exe"
-            for proc in psutil.process_iter(["name"])
+            name == "explorer.exe" for name, _ in list_processes().values()
         )
         if not explorer_running:
             write_log("explorer.exe no estaba ejecutándose. Iniciando explorer.exe.")
@@ -826,7 +1206,6 @@ class SystemGuard:
         """
         Limpieza segura sin archivo de respaldo: elimina únicamente las políticas
         restrictivas de WinLock si coinciden con los valores de bloqueo.
-        Funciona con o sin permisos de Administrador (omite HKLM si no hay permisos).
         """
         restored = 0
         skipped_admin = 0
@@ -943,11 +1322,7 @@ class SystemGuard:
 
     @classmethod
     def restore(cls, force_fallback=False):
-        """
-        Restaura exactamente el registro y los botones de energía previos.
-        Si no existe respaldo o está dañado y force_fallback=True, realiza una
-        limpieza segura sin requerir privilegios de Administrador.
-        """
+        """Restaura exactamente el registro y los botones de energía previos."""
         with cls._lock:
             state_payload = None
             state_corrupt = False
@@ -1081,16 +1456,8 @@ def get_monitors_info():
         )
         return True
 
-    MONITORENUMPROC = ctypes.WINFUNCTYPE(
-        ctypes.wintypes.BOOL,
-        ctypes.wintypes.HMONITOR,
-        ctypes.wintypes.HDC,
-        ctypes.POINTER(ctypes.wintypes.RECT),
-        ctypes.wintypes.LPARAM,
-    )
-
     callback = MONITORENUMPROC(_monitor_enum_callback)
-    user32.EnumDisplayMonitors(0, 0, callback, 0)
+    user32.EnumDisplayMonitors(None, None, callback, 0)
 
     if not monitors:
         w = user32.GetSystemMetrics(0)
@@ -1109,46 +1476,29 @@ def get_monitors_info():
     return monitors
 
 
-def translate_key_to_char(
-    scan_code, is_keypad, shift_on, altgr_on, caps_on, fallback_name
-):
-    """Traduce un scan_code al carácter Unicode exacto según el teclado de Windows."""
-    if is_keypad:
-        if fallback_name == "decimal":
-            return "."
-        if fallback_name and len(fallback_name) == 1 and fallback_name.isprintable():
-            return fallback_name
-        return ""
-
+def translate_key_to_char(vk, scan_code, shift_on, altgr_on, caps_on):
+    """Traduce (vk, scan_code) al carácter Unicode exacto según el teclado activo de Windows."""
     try:
         hkl = user32.GetKeyboardLayout(0)
-        vk = user32.MapVirtualKeyExW(scan_code, 1, hkl)  # MAPVK_VSC_TO_VK
-        if vk:
-            key_state = (ctypes.c_ubyte * 256)()
-            if shift_on:
-                key_state[0x10] = 0x80  # VK_SHIFT
-            if altgr_on:
-                key_state[0x11] = 0x80  # VK_CONTROL
-                key_state[0x12] = 0x80  # VK_MENU
-            if caps_on:
-                key_state[0x14] = 0x01  # VK_CAPITAL
+        key_state = (ctypes.c_ubyte * 256)()
+        if shift_on:
+            key_state[VK_SHIFT] = 0x80
+        if altgr_on:
+            key_state[VK_CONTROL] = 0x80
+            key_state[VK_MENU] = 0x80
+        if caps_on:
+            key_state[VK_CAPITAL] = 0x01
 
-            buf = ctypes.create_unicode_buffer(8)
-            res = user32.ToUnicodeEx(vk, scan_code, key_state, buf, 8, 0, hkl)
-            if res > 0:
-                text = buf.value[:res]
-                if text and text.isprintable():
-                    return text
-            elif res < 0:
-                return ""
+        buf = ctypes.create_unicode_buffer(8)
+        res = user32.ToUnicodeEx(vk, scan_code, key_state, buf, 8, 0, hkl)
+        if res > 0:
+            text = buf.value[:res]
+            if text and text.isprintable():
+                return text
+        elif res < 0:
+            return ""
     except Exception:
         pass
-
-    if fallback_name and len(fallback_name) == 1 and fallback_name.isprintable():
-        if fallback_name.isalpha():
-            is_upper = (caps_on and not shift_on) or (not caps_on and shift_on)
-            return fallback_name.upper() if is_upper else fallback_name.lower()
-        return fallback_name
     return ""
 
 
@@ -1173,17 +1523,24 @@ def force_window_topmost(win):
         pass
 
 
-class MouseBlocker:
-    """Bloquea movimiento y clics del ratón mediante WH_MOUSE_LL en un hilo dedicado."""
+class InputBlocker:
+    """
+    Bloquea globalmente teclado (WH_KEYBOARD_LL) y ratón (WH_MOUSE_LL) mediante
+    hooks nativos de Windows en un único hilo dedicado con bucle de mensajes.
+    """
 
+    WH_KEYBOARD_LL = 13
     WH_MOUSE_LL = 14
     WM_QUIT = 0x0012
 
-    def __init__(self):
+    def __init__(self, on_key_callback=None):
+        self._on_key_callback = on_key_callback
         self._thread = None
         self._thread_id = None
-        self._hook_id = None
-        self._hook_proc = None
+        self._kbd_hook_id = None
+        self._mouse_hook_id = None
+        self._kbd_proc = None
+        self._mouse_proc = None
         self._running = False
         self._ready_event = threading.Event()
 
@@ -1191,40 +1548,70 @@ class MouseBlocker:
     def is_active(self):
         return bool(
             self._running
-            and self._hook_id
+            and self._kbd_hook_id
+            and self._mouse_hook_id
             and self._thread
             and self._thread.is_alive()
         )
 
     def start(self):
+        global _active_input_blocker
         if self.is_active:
             return
+        self.stop()
         self._running = True
         self._ready_event.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
-        self._ready_event.wait(timeout=1.0)
+        self._ready_event.wait(timeout=1.5)
+        _active_input_blocker = self
 
     def _run(self):
         self._thread_id = kernel32.GetCurrentThreadId()
         msg = ctypes.wintypes.MSG()
         user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)
 
+        def _low_level_kbd_proc(nCode, wParam, lParam):
+            if nCode >= 0 and self._running:
+                try:
+                    kb = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                    is_down = wParam in (WM_KEYDOWN, WM_SYSKEYDOWN)
+                    if self._on_key_callback:
+                        self._on_key_callback(
+                            kb.vkCode, kb.scanCode, kb.flags, is_down
+                        )
+                except Exception:
+                    pass
+                return 1
+            return user32.CallNextHookEx(self._kbd_hook_id, nCode, wParam, lParam)
+
         def _low_level_mouse_proc(nCode, wParam, lParam):
             if nCode >= 0 and self._running:
                 return 1
-            return user32.CallNextHookEx(self._hook_id, nCode, wParam, lParam)
+            return user32.CallNextHookEx(self._mouse_hook_id, nCode, wParam, lParam)
 
-        self._hook_proc = HOOKPROC(_low_level_mouse_proc)
-        self._hook_id = user32.SetWindowsHookExW(
-            self.WH_MOUSE_LL, self._hook_proc, None, 0
+        self._kbd_proc = HOOKPROC(_low_level_kbd_proc)
+        self._mouse_proc = HOOKPROC(_low_level_mouse_proc)
+
+        self._kbd_hook_id = user32.SetWindowsHookExW(
+            self.WH_KEYBOARD_LL, self._kbd_proc, None, 0
         )
-        self._ready_event.set()
+        if not self._kbd_hook_id:
+            write_log(
+                f"No se pudo instalar WH_KEYBOARD_LL (error={ctypes.get_last_error()})."
+            )
 
-        if not self._hook_id:
+        self._mouse_hook_id = user32.SetWindowsHookExW(
+            self.WH_MOUSE_LL, self._mouse_proc, None, 0
+        )
+        if not self._mouse_hook_id:
             write_log(
                 f"No se pudo instalar WH_MOUSE_LL (error={ctypes.get_last_error()})."
             )
+
+        self._ready_event.set()
+
+        if not self._kbd_hook_id and not self._mouse_hook_id:
             self._running = False
             return
 
@@ -1232,11 +1619,15 @@ class MouseBlocker:
             user32.TranslateMessage(ctypes.byref(msg))
             user32.DispatchMessageW(ctypes.byref(msg))
 
-        if self._hook_id:
-            user32.UnhookWindowsHookEx(self._hook_id)
-            self._hook_id = None
+        if self._kbd_hook_id:
+            user32.UnhookWindowsHookEx(self._kbd_hook_id)
+            self._kbd_hook_id = None
+        if self._mouse_hook_id:
+            user32.UnhookWindowsHookEx(self._mouse_hook_id)
+            self._mouse_hook_id = None
 
     def stop(self):
+        global _active_input_blocker
         self._running = False
         if self._thread_id:
             try:
@@ -1247,6 +1638,8 @@ class MouseBlocker:
             self._thread.join(timeout=1.0)
         self._thread = None
         self._thread_id = None
+        if _active_input_blocker is self:
+            _active_input_blocker = None
 
 
 class WinLock:
@@ -1268,15 +1661,17 @@ class WinLock:
         self._watchdog_thread = None
         self._watchdog_running = False
         self._allowed_preexisting_procs = set()
-        self._mouse_blocker = MouseBlocker()
+        self._input_blocker = InputBlocker(self._on_raw_key_event)
         self._is_locked = False
         self._is_quitting = False
-        self._key_queue = queue.Queue()
+
+        self._key_events = []
+        self._key_events_lock = threading.Lock()
         self._held_shifts = set()
         self._held_ctrls = set()
         self._left_alt_down = False
         self._altgr_down = False
-        self._caps_lock_on = bool(user32.GetKeyState(0x14) & 1)
+        self._caps_lock_on = bool(user32.GetKeyState(VK_CAPITAL) & 1)
         self._caps_key_held = False
 
         # Subclasificación de ventana anti-apagado y anti-cierre
@@ -1289,14 +1684,6 @@ class WinLock:
         self.secondary_screens = []
         self.primary_lock_window = None
         self._monitor_signature = None
-
-        try:
-            locale.setlocale(locale.LC_TIME, "es_ES.UTF-8")
-        except locale.Error:
-            try:
-                locale.setlocale(locale.LC_TIME, "Spanish_Spain.1252")
-            except locale.Error:
-                pass
 
         self.root.title(f"WinLock {LOCAL_VERSION}")
         self.root.geometry("410x375")
@@ -1323,10 +1710,14 @@ class WinLock:
 
         self.create_setup_window()
 
+    def _enqueue_key(self, kind, payload=None):
+        with self._key_events_lock:
+            self._key_events.append((kind, payload))
+
     def _record_event(self, message, level="info", dedupe_key=None, dedupe_seconds=3.0):
         """Registra un evento cronológico de la sesión de bloqueo (thread-safe)."""
         now_mono = time.monotonic()
-        ts = datetime.now().strftime("%H:%M:%S")
+        ts = time.strftime("%H:%M:%S")
         with self._events_lock:
             if dedupe_key is not None:
                 last_seen = self._event_dedupe.get(dedupe_key, 0.0)
@@ -1353,7 +1744,7 @@ class WinLock:
             or not self.setup_caps_label.winfo_exists()
         ):
             return
-        caps_on = bool(user32.GetKeyState(0x14) & 1)
+        caps_on = bool(user32.GetKeyState(VK_CAPITAL) & 1)
         self.setup_caps_label.config(text="Bloq Mayús activado" if caps_on else "")
 
     def _poll_setup_caps(self):
@@ -1477,30 +1868,31 @@ class WinLock:
     def _snapshot_preexisting_processes(self):
         """Registra terminales/herramientas ya abiertos para no interrumpir tareas activas."""
         self._allowed_preexisting_procs = set()
-        for proc in psutil.process_iter(["pid", "name", "create_time"]):
-            try:
-                name = (proc.info.get("name") or "").lower()
-                if name in NEW_INSTANCE_BLOCK_TARGETS:
-                    self._allowed_preexisting_procs.add(
-                        (proc.info["pid"], proc.info.get("create_time"))
-                    )
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                continue
+        for pid, (name, _) in list_processes().items():
+            if name in NEW_INSTANCE_BLOCK_TARGETS:
+                ctime = get_process_creation_time(pid)
+                self._allowed_preexisting_procs.add((pid, ctime))
         write_log(
             f"Snapshot de procesos previos preservados: {len(self._allowed_preexisting_procs)}."
         )
 
-    def _is_descendant_of_allowed(self, proc):
+    def _is_descendant_of_allowed(self, pid, procs_map, child_ctime):
         """Permite subprocesos lanzados por scripts/terminales que ya estaban corriendo."""
-        try:
-            for parent in proc.parents():
-                if (
-                    parent.pid,
-                    parent.create_time(),
-                ) in self._allowed_preexisting_procs:
-                    return True
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            pass
+        visited = {pid}
+        cur_pid = pid
+        cur_ctime = child_ctime
+        while cur_pid in procs_map:
+            _, ppid = procs_map[cur_pid]
+            if not ppid or ppid in visited or ppid not in procs_map:
+                break
+            visited.add(ppid)
+            p_ctime = get_process_creation_time(ppid)
+            if cur_ctime is not None and p_ctime is not None and p_ctime > cur_ctime:
+                break
+            if (ppid, p_ctime) in self._allowed_preexisting_procs:
+                return True
+            cur_pid = ppid
+            cur_ctime = p_ctime
         return False
 
     def _install_window_shield(self, win):
@@ -1577,17 +1969,19 @@ class WinLock:
         write_log("Iniciando proceso de bloqueo blindado.")
         self._is_locked = True
         self.lock_start_time = time.time()
-        self.lock_start_dt = datetime.now().strftime("%H:%M:%S")
+        self.lock_start_dt = time.strftime("%H:%M:%S")
         self.failed_attempts = 0
         self.last_failed_time = None
         self.cooldown_until = 0.0
-        self._caps_lock_on = bool(user32.GetKeyState(0x14) & 1)
+        self._held_shifts.clear()
+        self._held_ctrls.clear()
+        self._left_alt_down = False
+        self._altgr_down = False
+        self._caps_key_held = False
+        self._caps_lock_on = bool(user32.GetKeyState(VK_CAPITAL) & 1)
 
-        while not self._key_queue.empty():
-            try:
-                self._key_queue.get_nowait()
-            except queue.Empty:
-                break
+        with self._key_events_lock:
+            self._key_events.clear()
 
         with self._events_lock:
             self.security_events = []
@@ -1611,17 +2005,17 @@ class WinLock:
 
     def _kill_target_processes(self):
         """Cierra procesos prohibidos y solo nuevas instancias no autorizadas de terminales."""
-        for proc in psutil.process_iter(["pid", "name", "create_time"]):
+        my_pid = os.getpid()
+        procs_map = list_processes()
+        for pid, (name, _) in procs_map.items():
             if not self._watchdog_running:
                 return
-            try:
-                name = (proc.info.get("name") or "").lower()
-                if not name:
-                    continue
+            if not name or pid == my_pid:
+                continue
 
-                if name in ALWAYS_KILL_TARGETS:
-                    proc.kill()
-                    write_log(f"Proceso bloqueado eliminado: {name} (PID {proc.pid})")
+            if name in ALWAYS_KILL_TARGETS:
+                if terminate_process(pid):
+                    write_log(f"Proceso bloqueado eliminado: {name} (PID {pid})")
                     self._record_event(
                         f"Proceso bloqueado terminado: {name}",
                         level="alert",
@@ -1630,16 +2024,17 @@ class WinLock:
                     )
                     if name in ("shutdown.exe", "logoff.exe", "slidetoshutdown.exe"):
                         abort_system_shutdown()
-                elif name in NEW_INSTANCE_BLOCK_TARGETS:
-                    key = (proc.info["pid"], proc.info.get("create_time"))
-                    if key in self._allowed_preexisting_procs:
-                        continue
-                    if self._is_descendant_of_allowed(proc):
-                        self._allowed_preexisting_procs.add(key)
-                        continue
-                    proc.kill()
+            elif name in NEW_INSTANCE_BLOCK_TARGETS:
+                ctime = get_process_creation_time(pid)
+                key = (pid, ctime)
+                if key in self._allowed_preexisting_procs:
+                    continue
+                if self._is_descendant_of_allowed(pid, procs_map, ctime):
+                    self._allowed_preexisting_procs.add(key)
+                    continue
+                if terminate_process(pid):
                     write_log(
-                        f"Nueva instancia bloqueada eliminada: {name} (PID {proc.pid})"
+                        f"Nueva instancia bloqueada eliminada: {name} (PID {pid})"
                     )
                     self._record_event(
                         f"Nueva instancia bloqueada cerrada: {name}",
@@ -1647,10 +2042,6 @@ class WinLock:
                         dedupe_key=f"kill_new:{name}",
                         dedupe_seconds=2.5,
                     )
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                continue
-            except Exception:
-                pass
 
     def _watchdog_loop(self):
         """Loop de control en hilo secundario."""
@@ -1720,98 +2111,88 @@ class WinLock:
             sec_win.config(cursor="none", bg="#0a0a0a")
             sec_win.protocol("WM_DELETE_WINDOW", lambda: None)
 
-            sec_label = tk.Label(
+            tk.Label(
                 sec_win,
                 text="WinLock - Pantalla protegida",
                 font=("Segoe UI", 14),
                 fg="#333333",
                 bg="#0a0a0a",
                 cursor="none",
-            )
-            sec_label.pack(expand=True)
+            ).pack(expand=True)
             self.secondary_screens.append(sec_win)
 
-    def _on_raw_key_event(self, event):
+    def _on_raw_key_event(self, vk, scan_code, flags, is_down):
         """
-        Hook global de teclado (hilo de keyboard).
-        Suprime SIEMPRE todos los eventos (KEY_DOWN y KEY_UP) devolviendo False
-        y encola las teclas seguras para el hilo principal de Tkinter.
+        Procesa teclas capturadas por WH_KEYBOARD_LL (ya suprimidas para el SO)
+        y encola únicamente acciones y caracteres seguros para el hilo de Tkinter.
         """
         if not self._is_locked:
-            return True
+            return
 
-        name = (event.name or "").lower()
-        is_down = event.event_type == keyboard.KEY_DOWN
-        scan_code = event.scan_code
-
-        if name in ("shift", "left shift", "right shift"):
+        if vk in (VK_SHIFT, VK_LSHIFT, VK_RSHIFT):
             if is_down:
-                self._held_shifts.add(scan_code)
+                self._held_shifts.add(vk)
             else:
-                self._held_shifts.discard(scan_code)
-            return False
+                self._held_shifts.discard(vk)
+            return
 
-        if name in ("right alt", "alt gr"):
+        if vk == VK_RMENU or (vk == VK_MENU and (flags & LLKHF_EXTENDED)):
             self._altgr_down = is_down
-            return False
+            return
 
-        if name in ("alt", "left alt"):
+        if vk == VK_LMENU or (vk == VK_MENU and not (flags & LLKHF_EXTENDED)):
             self._left_alt_down = is_down
-            return False
+            return
 
-        if name in ("ctrl", "left ctrl", "right ctrl"):
+        if vk in (VK_CONTROL, VK_LCONTROL, VK_RCONTROL):
             if is_down:
-                self._held_ctrls.add(scan_code)
+                self._held_ctrls.add(vk)
             else:
-                self._held_ctrls.discard(scan_code)
-            return False
+                self._held_ctrls.discard(vk)
+            return
 
-        if name in ("caps lock", "bloq mayús", "bloq mayus") or (
-            scan_code == 58 and not event.is_keypad
-        ):
+        if vk == VK_CAPITAL:
             if is_down and not self._caps_key_held:
                 self._caps_lock_on = not self._caps_lock_on
-                self._key_queue.put(("CAPS", self._caps_lock_on))
+                self._enqueue_key("CAPS", self._caps_lock_on)
             self._caps_key_held = is_down
-            return False
+            return
 
         if not is_down:
-            return False
+            return
 
-        if name in BLOCKED_SPECIAL_KEYS:
-            return False
+        if vk in BLOCKED_VK_CODES:
+            return
 
         if self._left_alt_down:
-            return False
+            return
 
         if self._held_ctrls and not self._altgr_down:
-            if name == "backspace":
-                self._key_queue.put(("CLEAR", None))
-            return False
+            if vk == VK_BACK:
+                self._enqueue_key("CLEAR")
+            return
 
-        if name == "enter":
-            self._key_queue.put(("ENTER", None))
-        elif name == "backspace":
-            self._key_queue.put(("BACKSPACE", None))
-        elif name == "esc":
-            self._key_queue.put(("CLEAR", None))
-        elif name == "space":
-            self._key_queue.put(("CHAR", " "))
+        if vk == VK_RETURN:
+            self._enqueue_key("ENTER")
+        elif vk == VK_BACK:
+            self._enqueue_key("BACKSPACE")
+        elif vk == VK_ESCAPE:
+            self._enqueue_key("CLEAR")
+        elif vk == VK_SPACE:
+            self._enqueue_key("CHAR", " ")
+        elif vk in NUMPAD_VK_CHARS:
+            self._enqueue_key("CHAR", NUMPAD_VK_CHARS[vk])
         else:
-            self._key_queue.put(
+            self._enqueue_key(
+                "KEY",
                 (
-                    "KEY",
-                    (
-                        scan_code,
-                        bool(event.is_keypad),
-                        bool(self._held_shifts),
-                        self._altgr_down,
-                        self._caps_lock_on,
-                        event.name,
-                    ),
-                )
+                    vk,
+                    scan_code,
+                    bool(self._held_shifts),
+                    self._altgr_down,
+                    self._caps_lock_on,
+                ),
             )
-        return False
 
     def create_lock_screen(self):
         """Crea ventanas de bloqueo en TODOS los monitores detectados."""
@@ -1981,6 +2362,10 @@ class WinLock:
 
         status_clear_job = {"id": None}
 
+        def ceil_sec(delta):
+            iv = int(delta)
+            return max(1, iv + (1 if delta > iv else 0))
+
         def set_entry_text(action, value=""):
             unlock_entry.config(state="normal")
             if action == "append":
@@ -2005,14 +2390,14 @@ class WinLock:
         def check_password():
             now = time.time()
             if now < self.cooldown_until:
-                rem = max(1, math.ceil(self.cooldown_until - now))
+                rem = ceil_sec(self.cooldown_until - now)
                 status_label.config(
                     text=f"Demasiados intentos fallidos ({self.failed_attempts}). Espere {rem}s..."
                 )
                 return
 
             entered_pass = unlock_entry.get()
-            if hmac.compare_digest(entered_pass, self.unlock_password):
+            if const_time_equals(entered_pass, self.unlock_password):
                 write_log(
                     f"Contraseña correcta. Desbloqueando (intentos fallidos: {self.failed_attempts})."
                 )
@@ -2020,7 +2405,7 @@ class WinLock:
                 self._unlock_and_exit()
             else:
                 self.failed_attempts += 1
-                self.last_failed_time = datetime.now().strftime("%H:%M:%S")
+                self.last_failed_time = time.strftime("%H:%M:%S")
                 write_log(
                     f"Contraseña incorrecta introducida (intento #{self.failed_attempts})."
                 )
@@ -2059,40 +2444,38 @@ class WinLock:
                     )
 
         def process_key_queue():
-            """Procesa la cola de eventos de teclado en el hilo principal."""
+            """Procesa los eventos de teclado pendientes en el hilo principal."""
             if not self._is_locked or not lock_win.winfo_exists():
                 return
-            try:
-                while True:
-                    kind, payload = self._key_queue.get_nowait()
-                    if kind == "CAPS":
-                        caps_label.config(
-                            fg="#f0ad4e" if payload else "#1c1c1c"
-                        )
-                        continue
+            with self._key_events_lock:
+                pending = self._key_events
+                self._key_events = []
 
-                    if time.time() < self.cooldown_until:
-                        continue
+            for kind, payload in pending:
+                if kind == "CAPS":
+                    caps_label.config(fg="#f0ad4e" if payload else "#1c1c1c")
+                    continue
 
-                    if status_label.cget("text"):
-                        status_label.config(text="")
+                if time.time() < self.cooldown_until:
+                    continue
 
-                    if kind == "ENTER":
-                        check_password()
-                        if not self._is_locked:
-                            return
-                    elif kind == "BACKSPACE":
-                        set_entry_text("backspace")
-                    elif kind == "CLEAR":
-                        set_entry_text("clear")
-                    elif kind == "CHAR":
-                        set_entry_text("append", payload)
-                    elif kind == "KEY":
-                        char = translate_key_to_char(*payload)
-                        if char:
-                            set_entry_text("append", char)
-            except queue.Empty:
-                pass
+                if status_label.cget("text"):
+                    status_label.config(text="")
+
+                if kind == "ENTER":
+                    check_password()
+                    if not self._is_locked:
+                        return
+                elif kind == "BACKSPACE":
+                    set_entry_text("backspace")
+                elif kind == "CLEAR":
+                    set_entry_text("clear")
+                elif kind == "CHAR":
+                    set_entry_text("append", payload)
+                elif kind == "KEY":
+                    char = translate_key_to_char(*payload)
+                    if char:
+                        set_entry_text("append", char)
 
             if self._is_locked and lock_win.winfo_exists():
                 lock_win.after(20, process_key_queue)
@@ -2100,16 +2483,18 @@ class WinLock:
         def update_time_and_duration():
             if not self._is_locked or not lock_win.winfo_exists():
                 return
-            time_label.config(text=time.strftime("%H:%M"))
-            date_label.config(text=time.strftime("%A, %d de %B de %Y").capitalize())
+            lt = time.localtime()
+            time_label.config(text=time.strftime("%H:%M", lt))
+            date_label.config(text=format_spanish_date(lt))
 
             duration_label.config(
-                text="Tiempo bloqueado: " + format_duration(time.time() - self.lock_start_time)
+                text="Tiempo bloqueado: "
+                + format_duration(time.time() - self.lock_start_time)
             )
 
             now = time.time()
             if now < self.cooldown_until:
-                rem = max(1, math.ceil(self.cooldown_until - now))
+                rem = ceil_sec(self.cooldown_until - now)
                 status_label.config(
                     text=f"Demasiados intentos fallidos ({self.failed_attempts}). Espere {rem}s..."
                 )
@@ -2150,12 +2535,12 @@ class WinLock:
                         )
                         self._build_secondary_screens(s_mons)
 
-                if not self._mouse_blocker.is_active:
-                    self._mouse_blocker.start()
+                if not self._input_blocker.is_active:
+                    self._input_blocker.start()
                     self._record_event(
-                        "Bloqueo de ratón restaurado automáticamente.",
+                        "Bloqueo de teclado/ratón restaurado automáticamente.",
                         level="warn",
-                        dedupe_key="mouse_repair",
+                        dedupe_key="input_repair",
                         dedupe_seconds=5.0,
                     )
 
@@ -2175,22 +2560,16 @@ class WinLock:
                     pid = ctypes.wintypes.DWORD(0)
                     user32.GetWindowThreadProcessId(fg, ctypes.byref(pid))
                     if pid.value:
-                        try:
-                            pname = psutil.Process(pid.value).name().lower()
-                            if pname in MENU_OVERLAY_PROCESSES:
-                                user32.ShowWindow(fg, SW_HIDE)
-                                self._record_event(
-                                    f"Menú emergente del sistema ocultado ({pname}).",
-                                    level="warn",
-                                    dedupe_key=f"overlay:{pname}",
-                                    dedupe_seconds=3.0,
-                                )
-                        except (
-                            psutil.NoSuchProcess,
-                            psutil.AccessDenied,
-                            psutil.ZombieProcess,
-                        ):
-                            pass
+                        exe_path = get_process_exe_path(pid.value)
+                        pname = os.path.basename(exe_path).lower() if exe_path else ""
+                        if pname in MENU_OVERLAY_PROCESSES:
+                            user32.ShowWindow(fg, SW_HIDE)
+                            self._record_event(
+                                f"Menú emergente del sistema ocultado ({pname}).",
+                                level="warn",
+                                dedupe_key=f"overlay:{pname}",
+                                dedupe_seconds=3.0,
+                            )
 
                 for sw in self.secondary_screens:
                     force_window_topmost(sw)
@@ -2202,8 +2581,7 @@ class WinLock:
             if self._is_locked and lock_win.winfo_exists():
                 lock_win.after(200, enforce_protection)
 
-        keyboard.hook(self._on_raw_key_event, suppress=True)
-        self._mouse_blocker.start()
+        self._input_blocker.start()
 
         update_time_and_duration()
         process_key_queue()
@@ -2231,7 +2609,9 @@ class WinLock:
 
             self.center_window(popup)
             popup.attributes("-topmost", True)
-            popup.after(250, lambda: popup.winfo_exists() and popup.attributes("-topmost", False))
+            popup.after(
+                250, lambda: popup.winfo_exists() and popup.attributes("-topmost", False)
+            )
 
             def close_popup(event=None):
                 try:
@@ -2242,11 +2622,14 @@ class WinLock:
 
             popup.protocol("WM_DELETE_WINDOW", close_popup)
 
-            # Cabecera
             header = tk.Frame(popup, bg="#1f1f1f", padx=22, pady=16)
             header.pack(fill=tk.X)
 
-            badge_color = "#ff4d4f" if self.failed_attempts > 0 else ("#f0ad4e" if alert_count > 0 else "#2ea043")
+            badge_color = (
+                "#ff4d4f"
+                if self.failed_attempts > 0
+                else ("#f0ad4e" if alert_count > 0 else "#2ea043")
+            )
             badge_text = (
                 "ALERTA DE SEGURIDAD"
                 if self.failed_attempts > 0
@@ -2282,7 +2665,6 @@ class WinLock:
                 bg="#1f1f1f",
             ).pack(anchor="w", pady=(4, 0))
 
-            # Tarjetas de estadísticas
             stats_frame = tk.Frame(popup, bg="#161616", padx=20, pady=14)
             stats_frame.pack(fill=tk.X)
             stats_frame.columnconfigure(0, weight=1)
@@ -2314,7 +2696,9 @@ class WinLock:
                     bg="#222222",
                 ).pack(anchor="w", pady=(2, 0))
 
-            make_stat_card(0, "Tiempo total bloqueado", format_duration(total_seconds), "#4da6ff")
+            make_stat_card(
+                0, "Tiempo total bloqueado", format_duration(total_seconds), "#4da6ff"
+            )
             make_stat_card(
                 1,
                 "Intentos fallidos",
@@ -2328,7 +2712,6 @@ class WinLock:
                 "#f0ad4e" if has_incidents else "#e0e0e0",
             )
 
-            # Lista de eventos ocurridos
             events_container = tk.Frame(popup, bg="#161616", padx=24)
             events_container.pack(fill=tk.BOTH, expand=True)
 
@@ -2373,7 +2756,11 @@ class WinLock:
 
             for ts, lvl, msg in events_copy:
                 events_text.insert(tk.END, f"[{ts}] ", "ts")
-                events_text.insert(tk.END, f"{msg}\n", lvl if lvl in ("info", "warn", "alert", "ok") else "info")
+                events_text.insert(
+                    tk.END,
+                    f"{msg}\n",
+                    lvl if lvl in ("info", "warn", "alert", "ok") else "info",
+                )
 
             if self.last_failed_time:
                 events_text.insert(
@@ -2385,7 +2772,6 @@ class WinLock:
             events_text.see(tk.END)
             events_text.config(state="disabled")
 
-            # Botones inferiores
             footer = tk.Frame(popup, bg="#161616", padx=24, pady=16)
             footer.pack(fill=tk.X)
 
@@ -2442,15 +2828,10 @@ class WinLock:
         self._is_locked = False
         self.unlock_password = ""
         total_seconds = time.time() - self.lock_start_time
-        end_time_str = datetime.now().strftime("%H:%M:%S")
+        end_time_str = time.strftime("%H:%M:%S")
         start_time_str = self.lock_start_dt or end_time_str
 
-        try:
-            keyboard.unhook_all()
-        except Exception:
-            pass
-
-        self._mouse_blocker.stop()
+        self._input_blocker.stop()
         self.stop_watchdog()
         self._remove_window_shield()
         SystemGuard.restore()
@@ -2489,12 +2870,7 @@ class WinLock:
 
         write_log("Finalizando aplicación y restaurando sistema.")
 
-        try:
-            keyboard.unhook_all()
-        except Exception:
-            pass
-
-        self._mouse_blocker.stop()
+        self._input_blocker.stop()
         self.stop_watchdog()
         self._remove_window_shield()
         SystemGuard.restore()
@@ -2556,18 +2932,17 @@ def _collect_self_pids(target_exe):
     Devuelve nuestro PID y, en ejecutables PyInstaller --onefile,
     también el PID del bootloader padre que mantiene el bloqueo del .exe.
     """
-    pids = [os.getpid()]
+    my_pid = os.getpid()
+    pids = [my_pid]
     try:
         norm_target = os.path.normcase(os.path.abspath(target_exe))
-        cur_proc = psutil.Process(os.getpid())
-        parent = cur_proc.parent()
-        if parent and parent.pid not in pids:
-            try:
-                parent_exe = os.path.normcase(os.path.abspath(parent.exe()))
-                if parent_exe == norm_target:
-                    pids.append(parent.pid)
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                pass
+        procs = list_processes()
+        if my_pid in procs:
+            _, ppid = procs[my_pid]
+            if ppid and ppid not in pids:
+                parent_exe = get_process_exe_path(ppid)
+                if parent_exe and os.path.normcase(os.path.abspath(parent_exe)) == norm_target:
+                    pids.append(ppid)
     except Exception:
         pass
     return pids
@@ -2578,7 +2953,7 @@ def cleanup_update_staging_dir(dir_path, delay_seconds=1.5):
     if not dir_path:
         return
     try:
-        temp_root = os.path.normcase(os.path.abspath(tempfile.gettempdir()))
+        temp_root = os.path.normcase(get_temp_dir())
         target = os.path.abspath(dir_path)
         norm_target = os.path.normcase(target)
         base = os.path.basename(target)
@@ -2596,12 +2971,12 @@ def cleanup_update_staging_dir(dir_path, delay_seconds=1.5):
             if not os.path.exists(target):
                 return
             try:
-                shutil.rmtree(target, ignore_errors=False)
+                remove_tree(target, ignore_errors=False)
                 write_log(f"Carpeta temporal de actualización limpiada: {target}")
                 return
             except Exception:
                 time.sleep(0.5)
-        shutil.rmtree(target, ignore_errors=True)
+        remove_tree(target, ignore_errors=True)
 
     threading.Thread(target=_worker, daemon=True).start()
 
@@ -2642,13 +3017,17 @@ def validate_pe_executable(
     with open(file_path, "rb") as f:
         dos_header = f.read(64)
         if len(dos_header) < 64 or dos_header[:2] != b"MZ":
-            raise ValueError("El archivo descargado no es un ejecutable Windows válido (cabecera MZ).")
-        pe_offset = struct.unpack_from("<I", dos_header, 0x3C)[0]
+            raise ValueError(
+                "El archivo descargado no es un ejecutable Windows válido (cabecera MZ)."
+            )
+        pe_offset = int.from_bytes(dos_header[0x3C:0x40], "little")
         if pe_offset < 64 or pe_offset > actual_size - 4:
             raise ValueError("Cabecera PE fuera de rango (archivo corrupto).")
         f.seek(pe_offset)
         if f.read(4) != b"PE\x00\x00":
-            raise ValueError("Firma PE inválida (posible página de error en lugar de .exe).")
+            raise ValueError(
+                "Firma PE inválida (posible página de error en lugar de .exe)."
+            )
 
     if expected_sha256:
         expected_hex = str(expected_sha256).strip().lower()
@@ -2660,10 +3039,9 @@ def validate_pe_executable(
                     break
                 hasher.update(chunk)
         actual_hex = hasher.hexdigest().lower()
-        if not hmac.compare_digest(actual_hex, expected_hex):
+        if not const_time_equals(actual_hex, expected_hex):
             raise ValueError("La verificación de integridad SHA-256 no coincide.")
 
-    # Eliminar Mark-of-the-Web si existiera
     try:
         ads_path = f"{file_path}:Zone.Identifier"
         if os.path.exists(ads_path):
@@ -2685,7 +3063,6 @@ def download_file_resilient(
     """
     Descarga un archivo por HTTPS con streaming de 64 KB, timeout por lectura,
     reintentos automáticos y reanudación HTTP Range (206 Partial Content).
-    Devuelve (bytes_descargados, content_length_del_servidor).
     """
     if not str(url).lower().startswith("https://"):
         raise ValueError("La URL de actualización debe utilizar HTTPS.")
@@ -2726,10 +3103,11 @@ def download_file_resilient(
                 expected_total = None
                 if status == 206 and resume_from > 0:
                     content_range = response.headers.get("Content-Range", "")
-                    m = re.search(r"/(\d+)$", content_range)
-                    if m:
-                        expected_total = int(m.group(1))
-                    elif content_len_hdr and content_len_hdr.isdigit():
+                    if "/" in content_range:
+                        total_part = content_range.rsplit("/", 1)[1].strip()
+                        if total_part.isdigit():
+                            expected_total = int(total_part)
+                    if expected_total is None and content_len_hdr and content_len_hdr.isdigit():
                         expected_total = resume_from + int(content_len_hdr)
                     file_mode = "ab"
                     downloaded = resume_from
@@ -2790,18 +3168,14 @@ def download_file_resilient(
 
         except InterruptedError:
             raise
-        except urllib.error.HTTPError as http_err:
-            # Si Range no es aceptado (416), reiniciar desde 0
-            if http_err.code == 416 and os.path.exists(dest_path):
+        except Exception as err:
+            if getattr(err, "code", None) == 416 and os.path.exists(dest_path):
                 try:
                     os.remove(dest_path)
                 except OSError:
                     pass
-            last_error = http_err
-            write_log(f"Error HTTP en intento {attempt}/{max_retries}: {http_err}")
-        except Exception as err:
             last_error = err
-            write_log(f"Error de red en intento {attempt}/{max_retries}: {err}")
+            write_log(f"Error de descarga en intento {attempt}/{max_retries}: {err}")
 
         if attempt < max_retries:
             backoff = 1.0 * attempt
@@ -2815,10 +3189,7 @@ def download_file_resilient(
 
 
 def _launch_cmd_updater_fallback(target_exe, new_exe, backup_exe, staging_dir, wait_pids):
-    """
-    Plan B puro en cmd.exe si PowerShell no estuviera disponible en el equipo.
-    Usa 'copy /b /y' que sobrescribe in-place sin eliminar el archivo ni perder su sitio en el Escritorio.
-    """
+    """Plan B puro en cmd.exe si PowerShell no estuviera disponible."""
     bat_path = os.path.join(staging_dir, "updater.bat")
     workdir = os.path.dirname(target_exe) or "."
     pid_wait_lines = []
@@ -2877,16 +3248,7 @@ def _launch_cmd_updater_fallback(target_exe, new_exe, backup_exe, staging_dir, w
 
 
 def launch_inplace_updater(target_exe, new_exe, staging_dir, target_version=""):
-    """
-    Lanza el actualizador independiente que:
-      1. Espera a que termine WinLock (y su bootloader PyInstaller).
-      2. Guarda copia de seguridad en %TEMP% (nunca ensucia el Escritorio).
-      3. Sobrescribe el .exe IN-PLACE (mantiene nombre exacto, posición en el Escritorio,
-         atributos y fecha de creación).
-      4. Solicita elevación UAC automáticamente solo si el directorio está protegido (ej. Program Files).
-      5. Hace rollback automático si falla la escritura o el relanzamiento.
-      6. Relanza el .exe actualizado con el entorno limpio.
-    """
+    """Lanza el actualizador independiente que sobrescribe el .exe in-place con rollback."""
     target_exe = os.path.abspath(target_exe)
     new_exe = os.path.abspath(new_exe)
     staging_dir = os.path.abspath(staging_dir)
@@ -2955,7 +3317,6 @@ function Copy-InPlace {
             [System.IO.FileShare]::Read
         )
         if (Test-Path -LiteralPath $DestPath) {
-            # FileMode.Open preserva la entrada de directorio, nombre exacto y posición del icono en el Escritorio
             $dst = [System.IO.File]::Open(
                 $DestPath,
                 [System.IO.FileMode]::Open,
@@ -3015,7 +3376,6 @@ function Start-TargetApp {
 
 Write-UpdateLog "Iniciando actualizacion in-place de '$targetExe' (Elevated=$Elevated)"
 
-# 1. Esperar cierre limpio de WinLock (y su bootloader PyInstaller si es --onefile)
 $deadline = (Get-Date).AddSeconds(10)
 while ((Get-Date) -lt $deadline) {
     $stillRunning = $false
@@ -3054,7 +3414,6 @@ $origAttributes = $null
 $hasBackup = $false
 $needsElevation = $false
 
-# 2. Guardar metadatos y respaldo en %TEMP% (nunca crear archivos en el Escritorio)
 if (Test-Path -LiteralPath $targetExe) {
     try {
         $fi = Get-Item -LiteralPath $targetExe -Force
@@ -3077,7 +3436,6 @@ if (Test-Path -LiteralPath $targetExe) {
     }
 }
 
-# 3. Sobrescritura estrictamente IN-PLACE con reintentos (OneDrive/Defender/desmontaje de imagen)
 $replaced = $false
 $unauthCount = 0
 $lastErr = ""
@@ -3107,7 +3465,6 @@ if (-not $needsElevation) {
     }
 }
 
-# 4. Si la carpeta esta protegida (ej. Program Files), elevar via UAC automaticamente
 if ($needsElevation) {
     Write-UpdateLog "Permisos insuficientes para '$targetExe'. Solicitando elevacion UAC."
     $psExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -3123,7 +3480,6 @@ if ($needsElevation) {
     }
 }
 
-# 5. Rollback automatico si fallo el reemplazo
 if (-not $replaced) {
     Write-UpdateLog "ERROR reemplazando '$targetExe': $lastErr"
     if ($hasBackup -and (Test-Path -LiteralPath $backupExe)) {
@@ -3142,7 +3498,6 @@ if (-not $replaced) {
     exit 1
 }
 
-# 6. Restaurar fecha de creacion y atributos originales
 if ($null -ne $origCreationUtc) {
     try { [System.IO.File]::SetCreationTimeUtc($targetExe, $origCreationUtc) } catch {}
 }
@@ -3153,7 +3508,6 @@ try { Unblock-File -LiteralPath $targetExe -ErrorAction SilentlyContinue } catch
 
 Write-UpdateLog "Actualizacion in-place completada ($expectedLen bytes). Relanzando '$targetExe'."
 
-# 7. Relanzar la nueva version (con rollback si fallara el arranque)
 $launched = Start-TargetApp -PassUpdatedArgs $true
 if (-not $launched -and $hasBackup -and (Test-Path -LiteralPath $backupExe)) {
     Write-UpdateLog "No se pudo arrancar la nueva version. Ejecutando rollback..."
@@ -3168,11 +3522,9 @@ Remove-Item -LiteralPath $backupExe -Force -ErrorAction SilentlyContinue
 exit 0
 """
 
-    # UTF-8 con BOM para compatibilidad total con tildes y rutas Unicode en PowerShell 5.1
     with open(ps_path, "w", encoding="utf-8-sig") as f:
         f.write(ps_script)
 
-    # Liberar el mutex antes de lanzar el actualizador para evitar bloqueo en el reinicio
     release_single_instance_mutex()
 
     ps_exe = os.path.join(
@@ -3183,7 +3535,7 @@ exit 0
         "powershell.exe",
     )
     if not os.path.isfile(ps_exe):
-        ps_exe = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
+        ps_exe = find_in_path("powershell.exe") or find_in_path("pwsh.exe")
 
     if ps_exe:
         try:
@@ -3218,7 +3570,7 @@ exit 0
 def show_startup_and_check_updates():
     """
     Muestra una ventana de carga mientras comprueba actualizaciones en segundo plano.
-    Al pulsar 'Actualizar', descarga, verifica e instala in-place sin ir a la web.
+    Al pulsar 'Actualizar', descarga, verifica e instala in-place.
     Devuelve True si se inició una actualización y el programa debe salir.
     """
     splash = tk.Tk()
@@ -3245,20 +3597,18 @@ def show_startup_and_check_updates():
     container = ttk.Frame(splash, padding="20 18 20 18")
     container.pack(expand=True, fill=tk.BOTH)
 
-    title_label = ttk.Label(
+    ttk.Label(
         container,
         text=f"Iniciando WinLock {LOCAL_VERSION}...",
         font=("Segoe UI", 12, "bold"),
-    )
-    title_label.pack(anchor="w")
+    ).pack(anchor="w")
 
-    status_label = ttk.Label(
+    ttk.Label(
         container,
         text="Comprobando actualizaciones...",
         font=("Segoe UI", 9),
         foreground="#555555",
-    )
-    status_label.pack(anchor="w", pady=(5, 10))
+    ).pack(anchor="w", pady=(5, 10))
 
     progress = ttk.Progressbar(container, orient="horizontal", mode="indeterminate")
     progress.pack(fill=tk.X)
@@ -3279,10 +3629,7 @@ def show_startup_and_check_updates():
         sdir = state.get("staging_dir")
         if sdir and not state["updating"]:
             state["staging_dir"] = None
-            try:
-                shutil.rmtree(sdir, ignore_errors=True)
-            except Exception:
-                pass
+            remove_tree(sdir, ignore_errors=True)
 
     def close_splash():
         state["closed"] = True
@@ -3346,7 +3693,10 @@ def show_startup_and_check_updates():
         btn_row.pack(fill=tk.X)
 
         def open_manual_site():
-            webbrowser.open(UPDATE_URL)
+            try:
+                os.startfile(UPDATE_URL)
+            except Exception:
+                pass
             close_splash()
 
         ttk.Button(
@@ -3383,15 +3733,14 @@ def show_startup_and_check_updates():
         if is_frozen:
             target_exe = os.path.abspath(sys.executable)
         else:
-            # En modo desarrollo (.py) nunca sobrescribir python.exe: descargar WinLock.exe en la carpeta del script
             script_dir = os.path.dirname(os.path.abspath(__file__))
             target_exe = os.path.join(script_dir, "WinLock.exe")
 
-        # Comprobar espacio libre antes de descargar
         try:
-            temp_root = tempfile.gettempdir()
+            temp_root = get_temp_dir()
             needed_bytes = max(30 * 1024 * 1024, int(declared_size_bytes * 2.5))
-            if shutil.disk_usage(temp_root).free < needed_bytes:
+            free_bytes = get_free_disk_bytes(temp_root)
+            if free_bytes is not None and free_bytes < needed_bytes:
                 show_error_view(
                     latest_info,
                     "No hay suficiente espacio libre en la unidad temporal para descargar la actualización.",
@@ -3405,12 +3754,11 @@ def show_startup_and_check_updates():
 
         clear_container()
 
-        heading = ttk.Label(
+        ttk.Label(
             container,
             text=f"Actualizando a WinLock {remote_tag}...",
             font=("Segoe UI", 11, "bold"),
-        )
-        heading.pack(anchor="w")
+        ).pack(anchor="w")
 
         pb = ttk.Progressbar(
             container,
@@ -3479,8 +3827,7 @@ def show_startup_and_check_updates():
                     )
                     close_splash()
                 else:
-                    # Modo .py: guardar el ejecutable validado sin tocar python.exe
-                    shutil.copy2(new_exe, target_exe)
+                    copy_file_bytes(new_exe, target_exe)
                     cleanup_current_staging()
                     messagebox.showinfo(
                         "Actualización descargada - WinLock",
@@ -3499,8 +3846,8 @@ def show_startup_and_check_updates():
 
         def download_worker():
             staging_dir = os.path.join(
-                tempfile.gettempdir(),
-                f"{UPDATE_STAGING_PREFIX}{uuid.uuid4().hex[:10]}",
+                get_temp_dir(),
+                f"{UPDATE_STAGING_PREFIX}{os.urandom(5).hex()}",
             )
             state["staging_dir"] = staging_dir
             try:
@@ -3622,11 +3969,13 @@ def show_startup_and_check_updates():
 
 
 def full_emergency_restore(explicit_restore=False):
-    """
-    Restaura políticas, botones de energía, barras de tareas, explorer y cursor.
-    Si explicit_restore=True (--restore), realiza limpieza segura incluso sin
-    archivo de respaldo o sin permisos de Administrador.
-    """
+    """Restaura políticas, botones de energía, barras de tareas, explorer, hooks y cursor."""
+    if _active_input_blocker is not None:
+        try:
+            _active_input_blocker.stop()
+        except Exception:
+            pass
+
     try:
         SystemGuard.restore(force_fallback=explicit_restore)
     except Exception as e:
@@ -3650,29 +3999,14 @@ def full_emergency_restore(explicit_restore=False):
     except Exception:
         pass
 
-    try:
-        keyboard.unhook_all()
-    except Exception:
-        pass
-
 
 if __name__ == "__main__":
-    # Limpieza silenciosa de la carpeta temporal tras completar una autoactualización
-    if "--cleanup-update" in sys.argv:
-        try:
-            idx = sys.argv.index("--cleanup-update")
-            if idx + 1 < len(sys.argv):
-                cleanup_update_staging_dir(sys.argv[idx + 1], delay_seconds=1.5)
-        except Exception:
-            pass
-
     just_updated = "--updated" in sys.argv
+    just_elevated = "--elevated" in sys.argv
 
     # Modo silencioso de recuperación tras corte eléctrico, fallo o ejecución manual
     if "--restore" in sys.argv:
-        write_log(
-            f"Ejecutando recuperación robusta (--restore, admin={is_admin()})."
-        )
+        write_log(f"Ejecutando recuperación robusta (--restore, admin={is_admin()}).")
         full_emergency_restore(explicit_restore=True)
         sys.exit(0)
 
@@ -3681,11 +4015,9 @@ if __name__ == "__main__":
         write_log("Detectado estado pendiente de sesión anterior. Restaurando sistema.")
         full_emergency_restore(explicit_restore=True)
 
-    atexit.register(full_emergency_restore)
-
-    # Si venimos de reiniciar tras actualizar, dar un margen breve para que termine el proceso anterior
+    # Margen breve si venimos de reiniciar tras actualizar o elevar permisos
     mutex_handle, is_first_instance = acquire_single_instance_mutex(
-        retries=25 if just_updated else 0,
+        retries=25 if (just_updated or just_elevated) else 0,
         retry_delay=0.15,
     )
     if not is_first_instance:
@@ -3698,7 +4030,21 @@ if __name__ == "__main__":
     write_log(
         f"\n{'='*50}\nIniciando sesión de WinLock {LOCAL_VERSION}"
         + (" (recién actualizado)" if just_updated else "")
+        + (" [Administrador]" if is_admin() else " [Usuario estándar]")
     )
+
+    # Antes de comprobar actualizaciones: avisar si no es Admin y ofrecer auto-elevación (Sí/No)
+    if not is_admin() and prompt_admin_elevation():
+        sys.exit(0)
+
+    # Limpieza silenciosa de la carpeta temporal tras completar una autoactualización
+    if "--cleanup-update" in sys.argv:
+        try:
+            idx = sys.argv.index("--cleanup-update")
+            if idx + 1 < len(sys.argv):
+                cleanup_update_staging_dir(sys.argv[idx + 1], delay_seconds=1.5)
+        except Exception:
+            pass
 
     # Si acaba de actualizarse, evitar comprobación redundante y posibles bucles de versión
     if not just_updated and show_startup_and_check_updates():
