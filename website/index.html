@@ -8,7 +8,7 @@
     <!-- SEO Esencial -->
     <title>WinLock — Bloquea tu pantalla sin suspender Windows ni pausar tus tareas</title>
     <meta name="description"
-        content="Utilidad gratuita, de código abierto y portable para Windows. Bloquea todos tus monitores con contraseña sin interrumpir renders, exportaciones ni descargas en segundo plano." />
+        content="Utilidad gratuita y portable que usa el bloqueo de Windows y solicita mantener el equipo activo para tus renders, exportaciones y descargas." />
     <meta name="author" content="Jaime Muñiz García (LabDigital)" />
     <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
     <link rel="canonical" href="https://winlock.labdigital.es" />
@@ -19,7 +19,7 @@
     <meta property="og:type" content="website" />
     <meta property="og:title" content="WinLock — Bloqueo de pantalla sin suspensión para Windows" />
     <meta property="og:description"
-        content="Protege tu puesto de trabajo. Bloquea múltiples monitores, deja un mensaje visible y mantén tu PC activo para descargas y renders." />
+        content="Bloquea tu sesión con Windows y solicita mantener el equipo activo para descargas y renders." />
     <meta property="og:url" content="https://winlock.labdigital.es" />
     <meta property="og:site_name" content="WinLock" />
     <meta property="og:image" content="https://winlock.labdigital.es/og-image.png" />
@@ -31,7 +31,7 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="WinLock para Windows" />
     <meta name="twitter:description"
-        content="Bloqueo con contraseña para entornos multimonitor sin suspensión del equipo." />
+        content="Bloqueo nativo de Windows con una solicitud para evitar la suspensión automática." />
     <meta name="twitter:image" content="https://winlock.labdigital.es/og-image.png" />
 
     <!-- Rendimiento & Tema -->
@@ -63,7 +63,7 @@
         "url": "https://labdigital.es"
       },
       "downloadUrl": "https://github.com/enderhacker/WinLock/releases",
-      "description": "Utilidad ligera y portable para Windows que bloquea todas las pantallas con contraseña impidiendo la suspensión del sistema para continuar renders y descargas."
+      "description": "Utilidad portable que usa el bloqueo de Windows y solicita evitar la suspensión automática mientras la sesión está bloqueada."
     }
     </script>
 
@@ -326,6 +326,12 @@
             font-family: var(--font-mono);
         }
 
+        .release-note {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            text-align: center;
+        }
+
         /* ==========================================================================
            CARACTERÍSTICAS DIRECTAS (3 COLUMNAS)
            ========================================================================== */
@@ -532,7 +538,7 @@
             <a href="#" class="brand-link" aria-label="WinLock - Página de inicio">
                 <img src="winlock.ico" alt="Icono de WinLock" class="brand-icon" onerror="this.style.display='none'">
                 <span class="brand-title">WinLock</span>
-                <span id="navVersion" class="version-badge">v0.7</span>
+                <span id="navVersion" class="version-badge">v0.8</span>
             </a>
 
             <nav class="nav-links" aria-label="Enlaces del proyecto">
@@ -560,16 +566,16 @@
             </p>
 
             <div class="cta-container">
-                <a id="btnDownload" href="https://github.com/enderhacker/WinLock/releases/latest" class="btn-download"
-                    aria-label="Descargar la última versión de WinLock">
+                <a id="btnDownload" href="https://github.com/enderhacker/WinLock/releases/latest" class="btn-download">
                     <i class="fa-solid fa-download" aria-hidden="true"></i>
-                    <span id="btnDownloadLabel">Descargar WinLock</span>
+                    <span id="btnDownloadLabel">Ver descargas oficiales</span>
                 </a>
 
                 <div class="btn-meta">
                     <i class="fa-brands fa-windows" aria-hidden="true"></i>
-                    <span id="fileSizeLabel">--.-- MB • Windows 10 / 11</span>
+                    <span id="fileSizeLabel">Windows 10 / 11</span>
                 </div>
+                <p id="releaseNote" class="release-note">Consulta en GitHub qué versión está disponible.</p>
             </div>
         </section>
 
@@ -578,26 +584,26 @@
             <div class="features-grid">
 
                 <article class="feature-card">
-                    <h2 class="feature-title">Tu PC no se duerme</h2>
+                    <h2 class="feature-title">Evita la suspensión automática</h2>
                     <p class="feature-text">
-                        A diferencia del bloqueo estándar de Windows, WinLock impide que el equipo entre en suspensión o
-                        apague los discos. Tus programas continuarán procesando al 100%.
+                        WinLock solicita que el equipo siga activo mientras la sesión está bloqueada. La pantalla puede
+                        apagarse y Windows sigue aplicando sus políticas de energía.
                     </p>
                 </article>
 
                 <article class="feature-card">
-                    <h2 class="feature-title">Cubre todos tus monitores</h2>
+                    <h2 class="feature-title">Bloqueo de Windows</h2>
                     <p class="feature-text">
-                        Si trabajas con varias pantallas, WinLock las oscurece todas a la vez. Solo la pantalla
-                        principal mostrará el campo seguro para introducir tu contraseña.
+                        Windows protege la sesión en todos tus monitores. Desbloquea con tu PIN, contraseña
+                        o Windows Hello, sin configurar una clave temporal.
                     </p>
                 </article>
 
                 <article class="feature-card">
-                    <h2 class="feature-title">Deja una nota visible</h2>
+                    <h2 class="feature-title">No cierra tus programas</h2>
                     <p class="feature-text">
-                        Añade un mensaje informativo en pantalla (por ejemplo: <em>"Exportando proyecto, vuelvo a las
-                            18:00"</em>) para evitar que compañeros de trabajo apaguen tu equipo por descuido.
+                        WinLock no cierra programas ni necesita permisos de administrador. Las tareas en segundo plano
+                        pueden seguir en marcha según el comportamiento de cada aplicación.
                     </p>
                 </article>
 
@@ -628,10 +634,10 @@
                         <i class="fa-solid fa-key" aria-hidden="true"></i>
                         <span>Paso 02</span>
                     </span>
-                    <h3 class="step-heading">Define tu clave temporal</h3>
+                    <h3 class="step-heading">Bloquea tu sesión</h3>
                     <p class="step-text">
-                        Introduce la clave temporal que utilizarás para desbloquear y, si quieres, escribe un mensaje
-                        visible para los demás.
+                        Pulsa <strong>Bloquear ahora</strong>. Windows se encarga del bloqueo y WinLock solicita que
+                        el equipo no se suspenda por inactividad.
                     </p>
                 </div>
 
@@ -642,8 +648,8 @@
                     </span>
                     <h3 class="step-heading">Desbloquea al regresar</h3>
                     <p class="step-text">
-                        Teclea tu clave y pulsa Enter. Tu escritorio, ratón y ventanas se restaurarán al instante
-                        exactamente como los dejaste.
+                        Usa tus credenciales habituales de Windows. WinLock libera su solicitud de energía
+                        cuando vuelves a la sesión.
                     </p>
                 </div>
             </div>
@@ -676,29 +682,28 @@
             const VERSION_URL = "https://raw.githubusercontent.com/enderhacker/WinLock/refs/heads/main/version.json";
             const downloadBtn = document.getElementById('btnDownload');
             const downloadLabel = document.getElementById('btnDownloadLabel');
-            const navVersion = document.getElementById('navVersion');
+            const currentVersion = document.getElementById('navVersion').textContent;
             const fileSizeLabel = document.getElementById('fileSizeLabel');
+            const releaseNote = document.getElementById('releaseNote');
 
             try {
                 const response = await fetch(VERSION_URL, {cache: 'no-cache'});
                 if (!response.ok) throw new Error('Error de conexión');
 
                 const data = await response.json();
-                const version = data.tag_name || 'v0.7';
-                const downloadUrl = data.download_url;
-                const size = data.size || '15 MB';
+                const version = data?.tag_name;
+                if (typeof version !== 'string' || !/^v[0-9]{1,9}(?:\.[0-9]{1,9}){1,2}$/.test(version)) return;
+                const size = typeof data.size === 'string' && /^\d+(?:[.,]\d+)? MB$/.test(data.size) ? data.size : '';
 
-                if (navVersion) navVersion.textContent = version;
-                if (downloadLabel) downloadLabel.textContent = `Descargar WinLock (${version})`;
-                if (fileSizeLabel) fileSizeLabel.textContent = `${size} • Windows 10 / 11`;
-                if (downloadUrl && downloadBtn) {
-                    downloadBtn.href = downloadUrl;
+                downloadLabel.textContent = `Descargar WinLock (${version})`;
+                if (size) fileSizeLabel.textContent = `${size} • Windows 10 / 11`;
+                downloadBtn.href = `https://github.com/enderhacker/WinLock/releases/download/${version}/WinLock.exe`;
+                releaseNote.hidden = version === currentVersion;
+                if (!releaseNote.hidden) {
+                    releaseNote.textContent = `Esta página describe WinLock ${currentVersion}. Descarga disponible: ${version}.`;
                 }
-            } catch (err) {
-                // Fallback seguro en caso de fallo de red
-                if (downloadBtn) downloadBtn.href = "https://github.com/enderhacker/WinLock/releases/latest";
-                if (downloadLabel) downloadLabel.textContent = "Descargar WinLock";
-                if (fileSizeLabel) fileSizeLabel.textContent = "--.-- MB • Windows 10 / 11";
+            } catch {
+                // Se conservan el enlace a GitHub Releases y el texto inicial.
             }
         }
 
