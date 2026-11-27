@@ -31,7 +31,19 @@ Los registros están en `%LOCALAPPDATA%\WinLock\WinLock.log`.
 
 3. El ejecutable queda en `dist\WinLock.exe`. Si falla la compilación o Windows impide reemplazar un ejecutable en uso, la copia anterior queda intacta.
 
-Actualiza `version.json` únicamente cuando el ejecutable de la nueva versión esté disponible en GitHub Releases. Las versiones anteriores usan ese archivo para descargar la actualización.
+## Publicar una versión
+
+1. Actualiza la versión de la aplicación (`LOCAL_VERSION` en `main.py`), el título de este README y la insignia `navVersion` de la web. Sube estos cambios a `main`.
+2. Crea y sube una etiqueta que coincida con esa versión:
+
+   ```powershell
+   git tag v0.8
+   git push origin v0.8
+   ```
+
+GitHub Actions ejecuta las pruebas, compila `WinLock.exe` y publica la versión con notas generadas por GitHub. Después actualiza `version.json` en `main` con la URL y el tamaño del ejecutable publicado. El sitio web y las versiones anteriores de WinLock leen ese archivo.
+
+El repositorio debe permitir que `GITHUB_TOKEN` publique lanzamientos y que el bot escriba en `main`. Si falla la actualización del manifiesto después de publicar, puedes volver a ejecutar el flujo: conservará el ejecutable ya publicado.
 
 ## Pruebas
 
