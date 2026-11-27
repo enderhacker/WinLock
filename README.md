@@ -4,7 +4,7 @@ WinLock usa la pantalla de bloqueo de Windows y solicita que el equipo no entre 
 
 Esta solicitud no impide que la pantalla se apague, que se suspenda manualmente el equipo ni que Windows aplique sus políticas de energía. WinLock ya no utiliza una contraseña temporal ni admite notas en la pantalla de bloqueo.
 
-La comprobación de versiones no bloquea el inicio. Si hay una versión disponible, **Ver descargas oficiales** abre GitHub Releases. Puedes descargarla en otro directorio y probarla antes de sustituir tu copia. WinLock nunca descarga ni sustituye el ejecutable por sí solo.
+La comprobación de versiones no bloquea el inicio. **Ver descargas oficiales** abre el [sitio de WinLock](https://winlock.labdigital.es/), que enlaza al ejecutable publicado. Puedes descargarlo en otro directorio y probarlo antes de sustituir tu copia. WinLock nunca descarga ni sustituye el ejecutable por sí solo.
 
 ## Ejecutar desde el código fuente
 
@@ -33,17 +33,11 @@ Los registros están en `%LOCALAPPDATA%\WinLock\WinLock.log`.
 
 ## Publicar una versión
 
-1. Actualiza la versión de la aplicación (`LOCAL_VERSION` en `main.py`), el título de este README y la insignia `navVersion` de la web. Sube estos cambios a `main`.
-2. Crea y sube una etiqueta que coincida con esa versión:
+Actualiza `LOCAL_VERSION` en `main.py`, el título de este README y la insignia `navVersion` de la web. Ejecuta `python -m scripts.release pending-version` para comprobar qué versión se publicará y sube los cambios a `main`.
 
-   ```powershell
-   git tag v0.8
-   git push origin v0.8
-   ```
+Si esa versión supera la de `version.json`, GitHub Actions ejecuta las pruebas, compila `WinLock.exe` y guarda `downloads/<versión>/WinLock.exe` y el manifiesto actualizado en un mismo commit en `main`. El sitio web y las versiones anteriores leen `version.json` para encontrar la descarga. Los ejecutables nuevos se publican en `main`; la pestaña Releases de GitHub requiere una etiqueta.
 
-GitHub Actions ejecuta las pruebas, compila `WinLock.exe` y publica la versión con notas generadas por GitHub. Después actualiza `version.json` en `main` con la URL y el tamaño del ejecutable publicado. El sitio web y las versiones anteriores de WinLock leen ese archivo.
-
-El repositorio debe permitir que `GITHUB_TOKEN` publique lanzamientos y que el bot escriba en `main`. Si falla la actualización del manifiesto después de publicar, puedes volver a ejecutar el flujo: conservará el ejecutable ya publicado.
+El repositorio debe permitir que `GITHUB_TOKEN` escriba en `main`. Para volver a comprobar o publicar una versión pendiente sin otro commit, ejecuta **Publish WinLock** desde la pestaña Actions con la rama `main`.
 
 ## Pruebas
 

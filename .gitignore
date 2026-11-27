@@ -3,5 +3,6 @@
 /.venv
 __pycache__/
 *.exe
+!/downloads/v*/WinLock.exe
 *.spec
 .log

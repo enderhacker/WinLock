@@ -6,7 +6,7 @@ import time
 import urllib.request
 
 
-RELEASES_URL = "https://github.com/enderhacker/WinLock/releases/latest"
+DOWNLOADS_URL = "https://winlock.labdigital.es/"
 MANIFEST_URL = (
     "https://raw.githubusercontent.com/enderhacker/WinLock/refs/heads/main/version.json"
 )

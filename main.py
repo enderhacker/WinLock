@@ -8,7 +8,7 @@ from tkinter import font, ttk
 import webbrowser
 
 from windows_session import WindowsSession
-from winlock_core import LockCycle, RELEASES_URL, UpdateCheck
+from winlock_core import DOWNLOADS_URL, LockCycle, UpdateCheck
 
 
 LOCAL_VERSION = "v0.8"
@@ -75,7 +75,7 @@ class WinLock:
         )
         self.check_button.pack(side="left", padx=(0, 8))
         ttk.Button(
-            buttons, text="Ver descargas oficiales", style="Action.TButton", command=self.open_releases
+            buttons, text="Ver descargas oficiales", style="Action.TButton", command=self.open_downloads
         ).pack(side="left")
         self.update_status = tk.StringVar()
         ttk.Label(frame, textvariable=self.update_status, wraplength=text_width, justify="left").grid(
@@ -113,13 +113,13 @@ class WinLock:
         self.check_button.state(["disabled"])
         self.update_status.set("Comprobando actualizaciones…")
 
-    def open_releases(self):
+    def open_downloads(self):
         try:
-            if not webbrowser.open(RELEASES_URL):
+            if not webbrowser.open(DOWNLOADS_URL):
                 raise OSError("No hay un navegador disponible.")
         except (OSError, webbrowser.Error):
             LOG.exception("No se pudo abrir la página de versiones.")
-            self.update_status.set(f"No se pudo abrir el navegador. Visita: {RELEASES_URL}")
+            self.update_status.set(f"No se pudo abrir el navegador. Visita: {DOWNLOADS_URL}")
 
     def poll(self):
         if self.cycle is not None:

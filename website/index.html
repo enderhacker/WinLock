@@ -62,7 +62,7 @@
         "name": "Jaime Muñiz García",
         "url": "https://labdigital.es"
       },
-      "downloadUrl": "https://github.com/enderhacker/WinLock/releases",
+      "downloadUrl": "https://winlock.labdigital.es/",
       "description": "Utilidad portable que usa el bloqueo de Windows y solicita evitar la suspensión automática mientras la sesión está bloqueada."
     }
     </script>
@@ -566,16 +566,16 @@
             </p>
 
             <div class="cta-container">
-                <a id="btnDownload" href="https://github.com/enderhacker/WinLock/releases/latest" class="btn-download">
+                <a id="btnDownload" href="https://github.com/enderhacker/WinLock" class="btn-download">
                     <i class="fa-solid fa-download" aria-hidden="true"></i>
-                    <span id="btnDownloadLabel">Ver descargas oficiales</span>
+                    <span id="btnDownloadLabel">Ver proyecto en GitHub</span>
                 </a>
 
                 <div class="btn-meta">
                     <i class="fa-brands fa-windows" aria-hidden="true"></i>
                     <span id="fileSizeLabel">Windows 10 / 11</span>
                 </div>
-                <p id="releaseNote" class="release-note">Consulta en GitHub qué versión está disponible.</p>
+                <p id="releaseNote" class="release-note">Consulta las descargas disponibles en el repositorio.</p>
             </div>
         </section>
 
@@ -693,17 +693,24 @@
                 const data = await response.json();
                 const version = data?.tag_name;
                 if (typeof version !== 'string' || !/^v[0-9]{1,9}(?:\.[0-9]{1,9}){1,2}$/.test(version)) return;
+                const downloadUrl = data.download_url;
+                const officialDownloads = [
+                    `https://raw.githubusercontent.com/enderhacker/WinLock/refs/heads/main/downloads/${version}/WinLock.exe`,
+                    `https://github.com/enderhacker/WinLock/releases/download/${version}/WinLock.exe`,
+                ];
+                if (typeof downloadUrl !== 'string' ||
+                    !officialDownloads.some(url => url.toLowerCase() === downloadUrl.toLowerCase())) return;
                 const size = typeof data.size === 'string' && /^\d+(?:[.,]\d+)? MB$/.test(data.size) ? data.size : '';
 
                 downloadLabel.textContent = `Descargar WinLock (${version})`;
                 if (size) fileSizeLabel.textContent = `${size} • Windows 10 / 11`;
-                downloadBtn.href = `https://github.com/enderhacker/WinLock/releases/download/${version}/WinLock.exe`;
+                downloadBtn.href = downloadUrl;
                 releaseNote.hidden = version === currentVersion;
                 if (!releaseNote.hidden) {
                     releaseNote.textContent = `Esta página describe WinLock ${currentVersion}. Descarga disponible: ${version}.`;
                 }
             } catch {
-                // Se conservan el enlace a GitHub Releases y el texto inicial.
+                // Se conservan el enlace al repositorio y el texto inicial.
             }
         }
 
