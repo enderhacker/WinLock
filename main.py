@@ -22,8 +22,14 @@ try:
     import winreg
     import atexit
     import urllib.request
+    import urllib.error
     import webbrowser
     import locale
+    import hashlib
+    import struct
+    import shutil
+    import tempfile
+    import re
     from datetime import datetime
 except ImportError as e:
     print(f"Faltan bibliotecas necesarias: {e}", file=sys.stderr)
@@ -251,6 +257,9 @@ kernel32.CreateMutexW.argtypes = [
 ]
 kernel32.CreateMutexW.restype = ctypes.wintypes.HANDLE
 
+kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
+
 kernel32.SetThreadExecutionState.argtypes = [ctypes.c_uint]
 kernel32.SetThreadExecutionState.restype = ctypes.c_uint
 
@@ -351,6 +360,9 @@ LATEST_VERSION_JSON = (
     "https://raw.githubusercontent.com/enderhacker/WinLock/refs/heads/main/version.json"
 )
 UPDATE_URL = "https://winlock.labdigital.es"
+UPDATE_STAGING_PREFIX = "WinLock_Update_"
+
+_single_instance_mutex_handle = None
 
 # GUIDs de botones de energía en Windows
 GUID_SYSTEM_BUTTON_SUBGROUP = "4f971e89-eebd-4455-a8de-9e59040e7347"
@@ -462,13 +474,60 @@ def is_admin():
 
 
 def parse_version(version_str):
-    """Convierte versiones como 'v0.8' en tuplas comparables (0, 8)."""
+    """Convierte versiones como 'v0.9', 'v0.10.0' en tuplas comparables normalizadas."""
     try:
         cleaned = str(version_str).strip().lstrip("vV")
-        parts = [int(p) for p in cleaned.split(".") if p.isdigit()]
+        parts = []
+        for seg in cleaned.split("."):
+            m = re.match(r"^(\d+)", seg.strip())
+            if m:
+                parts.append(int(m.group(1)))
+            else:
+                break
+        while len(parts) > 1 and parts[-1] == 0:
+            parts.pop()
         return tuple(parts) if parts else (0,)
     except Exception:
         return (0,)
+
+
+def parse_human_size(size_value):
+    """Convierte tamaños como '10.93 MB', '512 KB' o enteros a bytes aproximados."""
+    if isinstance(size_value, (int, float)) and size_value > 0:
+        return int(size_value)
+    if not isinstance(size_value, str):
+        return 0
+    m = re.match(r"^\s*([\d.,]+)\s*([KMGTP]?B?)\s*$", size_value.strip(), re.IGNORECASE)
+    if not m:
+        return 0
+    try:
+        num = float(m.group(1).replace(",", "."))
+        unit = m.group(2).upper()
+        factors = {
+            "": 1,
+            "B": 1,
+            "K": 1024,
+            "KB": 1024,
+            "M": 1024**2,
+            "MB": 1024**2,
+            "G": 1024**3,
+            "GB": 1024**3,
+            "T": 1024**4,
+            "TB": 1024**4,
+        }
+        return int(num * factors.get(unit, 1))
+    except Exception:
+        return 0
+
+
+def format_bytes(num_bytes):
+    """Formatea una cantidad de bytes a cadena legible."""
+    val = float(max(0, num_bytes))
+    for unit in ("B", "KB", "MB", "GB"):
+        if val < 1024.0 or unit == "GB":
+            return f"{val:.2f} {unit}" if unit in ("MB", "GB") else f"{val:.0f} {unit}"
+        val /= 1024.0
+    return f"{val:.2f} GB"
 
 
 def format_duration(total_seconds):
@@ -496,6 +555,7 @@ def get_app_data_dir():
 
 LOG_DIRECTORY = get_app_data_dir()
 LOG_FILE_PATH = os.path.join(LOG_DIRECTORY, LOG_FILE_NAME)
+UPDATER_LOG_PATH = os.path.join(LOG_DIRECTORY, "updater.log")
 RESTORE_STATE_PATH = os.path.join(LOG_DIRECTORY, "restore_state.json")
 
 try:
@@ -521,14 +581,33 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 
-def acquire_single_instance_mutex():
-    """Evita múltiples instancias simultáneas de WinLock."""
-    handle = kernel32.CreateMutexW(None, False, "Local\\WinLock_SingleInstance_Mutex")
-    if not handle:
-        return None, True
-    if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
-        return handle, False
-    return handle, True
+def acquire_single_instance_mutex(retries=0, retry_delay=0.15):
+    """Evita múltiples instancias simultáneas de WinLock con soporte de reintento tras actualizar."""
+    global _single_instance_mutex_handle
+    for attempt in range(retries + 1):
+        handle = kernel32.CreateMutexW(None, False, "Local\\WinLock_SingleInstance_Mutex")
+        if not handle:
+            return None, True
+        if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
+            kernel32.CloseHandle(handle)
+            if attempt < retries:
+                time.sleep(retry_delay)
+                continue
+            return None, False
+        _single_instance_mutex_handle = handle
+        return handle, True
+    return None, False
+
+
+def release_single_instance_mutex():
+    """Libera explícitamente el mutex de instancia única."""
+    global _single_instance_mutex_handle
+    if _single_instance_mutex_handle:
+        try:
+            kernel32.CloseHandle(_single_instance_mutex_handle)
+        except Exception:
+            pass
+        _single_instance_mutex_handle = None
 
 
 def abort_system_shutdown():
@@ -2451,14 +2530,699 @@ class WinLock:
             pass
 
 
+# ==============================================================================
+# SISTEMA DE AUTOACTUALIZACIÓN IN-PLACE (ROBUSTO, RESILIENTE Y EFICIENTE)
+# ==============================================================================
+
+def _build_clean_subprocess_env():
+    """Devuelve el entorno del proceso limpiando variables heredadas de PyInstaller."""
+    env = os.environ.copy()
+    for var in (
+        "_MEIPASS",
+        "_MEIPASS2",
+        "_PYI_APPLICATION_HOME_DIR",
+        "_PYI_ARCHIVE_FILE",
+        "_PYI_PARENT_PROCESS_LEVEL",
+        "_PYI_SPLASH_IPC",
+        "TCL_LIBRARY",
+        "TK_LIBRARY",
+    ):
+        env.pop(var, None)
+    return env
+
+
+def _collect_self_pids(target_exe):
+    """
+    Devuelve nuestro PID y, en ejecutables PyInstaller --onefile,
+    también el PID del bootloader padre que mantiene el bloqueo del .exe.
+    """
+    pids = [os.getpid()]
+    try:
+        norm_target = os.path.normcase(os.path.abspath(target_exe))
+        cur_proc = psutil.Process(os.getpid())
+        parent = cur_proc.parent()
+        if parent and parent.pid not in pids:
+            try:
+                parent_exe = os.path.normcase(os.path.abspath(parent.exe()))
+                if parent_exe == norm_target:
+                    pids.append(parent.pid)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
+    except Exception:
+        pass
+    return pids
+
+
+def cleanup_update_staging_dir(dir_path, delay_seconds=1.5):
+    """Elimina de forma segura la carpeta temporal de actualización en %TEMP%."""
+    if not dir_path:
+        return
+    try:
+        temp_root = os.path.normcase(os.path.abspath(tempfile.gettempdir()))
+        target = os.path.abspath(dir_path)
+        norm_target = os.path.normcase(target)
+        base = os.path.basename(target)
+        if not norm_target.startswith(temp_root + os.sep):
+            return
+        if not base.startswith(UPDATE_STAGING_PREFIX):
+            return
+    except Exception:
+        return
+
+    def _worker():
+        if delay_seconds > 0:
+            time.sleep(delay_seconds)
+        for _ in range(5):
+            if not os.path.exists(target):
+                return
+            try:
+                shutil.rmtree(target, ignore_errors=False)
+                write_log(f"Carpeta temporal de actualización limpiada: {target}")
+                return
+            except Exception:
+                time.sleep(0.5)
+        shutil.rmtree(target, ignore_errors=True)
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def validate_pe_executable(
+    file_path,
+    expected_content_length=None,
+    declared_size_bytes=0,
+    expected_sha256=None,
+):
+    """
+    Verifica rigurosamente que el archivo descargado es un ejecutable Windows PE válido
+    y completo antes de tocar el .exe existente.
+    """
+    if not os.path.isfile(file_path):
+        raise ValueError("El archivo descargado no existe.")
+
+    actual_size = os.path.getsize(file_path)
+    if actual_size < 256 * 1024:
+        raise ValueError(
+            f"El archivo descargado es demasiado pequeño ({format_bytes(actual_size)})."
+        )
+
+    if expected_content_length and actual_size != expected_content_length:
+        raise ValueError(
+            f"Tamaño incompleto: {format_bytes(actual_size)} de {format_bytes(expected_content_length)}."
+        )
+
+    if (
+        not expected_content_length
+        and declared_size_bytes > 0
+        and actual_size < int(declared_size_bytes * 0.5)
+    ):
+        raise ValueError(
+            f"El archivo descargado ({format_bytes(actual_size)}) no coincide con el tamaño esperado."
+        )
+
+    with open(file_path, "rb") as f:
+        dos_header = f.read(64)
+        if len(dos_header) < 64 or dos_header[:2] != b"MZ":
+            raise ValueError("El archivo descargado no es un ejecutable Windows válido (cabecera MZ).")
+        pe_offset = struct.unpack_from("<I", dos_header, 0x3C)[0]
+        if pe_offset < 64 or pe_offset > actual_size - 4:
+            raise ValueError("Cabecera PE fuera de rango (archivo corrupto).")
+        f.seek(pe_offset)
+        if f.read(4) != b"PE\x00\x00":
+            raise ValueError("Firma PE inválida (posible página de error en lugar de .exe).")
+
+    if expected_sha256:
+        expected_hex = str(expected_sha256).strip().lower()
+        hasher = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                hasher.update(chunk)
+        actual_hex = hasher.hexdigest().lower()
+        if not hmac.compare_digest(actual_hex, expected_hex):
+            raise ValueError("La verificación de integridad SHA-256 no coincide.")
+
+    # Eliminar Mark-of-the-Web si existiera
+    try:
+        ads_path = f"{file_path}:Zone.Identifier"
+        if os.path.exists(ads_path):
+            os.remove(ads_path)
+    except Exception:
+        pass
+
+    return actual_size
+
+
+def download_file_resilient(
+    url,
+    dest_path,
+    declared_size_bytes=0,
+    cancel_event=None,
+    progress_cb=None,
+    max_retries=3,
+):
+    """
+    Descarga un archivo por HTTPS con streaming de 64 KB, timeout por lectura,
+    reintentos automáticos y reanudación HTTP Range (206 Partial Content).
+    Devuelve (bytes_descargados, content_length_del_servidor).
+    """
+    if not str(url).lower().startswith("https://"):
+        raise ValueError("La URL de actualización debe utilizar HTTPS.")
+
+    last_error = None
+    chunk_size = 65536
+
+    for attempt in range(1, max_retries + 1):
+        if cancel_event and cancel_event.is_set():
+            raise InterruptedError("Descarga cancelada por el usuario.")
+
+        resume_from = 0
+        if attempt > 1 and os.path.exists(dest_path):
+            resume_from = os.path.getsize(dest_path)
+
+        headers = {
+            "User-Agent": f"WinLock-Updater/{LOCAL_VERSION}",
+            "Accept": "application/octet-stream, */*;q=0.8",
+            "Cache-Control": "no-cache",
+        }
+        if resume_from > 0:
+            headers["Range"] = f"bytes={resume_from}-"
+
+        if progress_cb:
+            msg = (
+                "Conectando con el servidor..."
+                if attempt == 1
+                else f"Reintentando descarga ({attempt}/{max_retries})..."
+            )
+            progress_cb(None, msg)
+
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=20) as response:
+                status = getattr(response, "status", response.getcode())
+                content_len_hdr = response.headers.get("Content-Length")
+
+                expected_total = None
+                if status == 206 and resume_from > 0:
+                    content_range = response.headers.get("Content-Range", "")
+                    m = re.search(r"/(\d+)$", content_range)
+                    if m:
+                        expected_total = int(m.group(1))
+                    elif content_len_hdr and content_len_hdr.isdigit():
+                        expected_total = resume_from + int(content_len_hdr)
+                    file_mode = "ab"
+                    downloaded = resume_from
+                else:
+                    if content_len_hdr and content_len_hdr.isdigit():
+                        expected_total = int(content_len_hdr)
+                    file_mode = "wb"
+                    downloaded = 0
+
+                display_total = expected_total or declared_size_bytes or 0
+                start_mono = time.monotonic()
+                session_bytes = 0
+                last_ui_update = 0.0
+
+                with open(dest_path, file_mode) as out_file:
+                    while True:
+                        if cancel_event and cancel_event.is_set():
+                            raise InterruptedError("Descarga cancelada por el usuario.")
+                        chunk = response.read(chunk_size)
+                        if not chunk:
+                            break
+                        out_file.write(chunk)
+                        n = len(chunk)
+                        downloaded += n
+                        session_bytes += n
+
+                        now_mono = time.monotonic()
+                        if progress_cb and (now_mono - last_ui_update >= 0.08):
+                            last_ui_update = now_mono
+                            elapsed = max(0.05, now_mono - start_mono)
+                            speed_mbs = (session_bytes / 1048576.0) / elapsed
+                            if display_total > 0:
+                                pct = min(99, int(downloaded * 100 / display_total))
+                                txt = (
+                                    f"{downloaded / 1048576:.2f} MB / "
+                                    f"{display_total / 1048576:.2f} MB "
+                                    f"({pct}%)  •  {speed_mbs:.1f} MB/s"
+                                )
+                                progress_cb(pct, txt)
+                            else:
+                                txt = f"{downloaded / 1048576:.2f} MB descargados  •  {speed_mbs:.1f} MB/s"
+                                progress_cb(None, txt)
+
+                    out_file.flush()
+
+                if expected_total is not None and downloaded != expected_total:
+                    raise IOError(
+                        f"Descarga incompleta ({downloaded} de {expected_total} bytes)."
+                    )
+
+                if progress_cb:
+                    total_for_msg = expected_total or downloaded
+                    progress_cb(
+                        100,
+                        f"{downloaded / 1048576:.2f} MB / {total_for_msg / 1048576:.2f} MB (100%)",
+                    )
+                return downloaded, expected_total
+
+        except InterruptedError:
+            raise
+        except urllib.error.HTTPError as http_err:
+            # Si Range no es aceptado (416), reiniciar desde 0
+            if http_err.code == 416 and os.path.exists(dest_path):
+                try:
+                    os.remove(dest_path)
+                except OSError:
+                    pass
+            last_error = http_err
+            write_log(f"Error HTTP en intento {attempt}/{max_retries}: {http_err}")
+        except Exception as err:
+            last_error = err
+            write_log(f"Error de red en intento {attempt}/{max_retries}: {err}")
+
+        if attempt < max_retries:
+            backoff = 1.0 * attempt
+            end_wait = time.monotonic() + backoff
+            while time.monotonic() < end_wait:
+                if cancel_event and cancel_event.is_set():
+                    raise InterruptedError("Descarga cancelada por el usuario.")
+                time.sleep(0.1)
+
+    raise RuntimeError(f"No se pudo completar la descarga: {last_error}")
+
+
+def _launch_cmd_updater_fallback(target_exe, new_exe, backup_exe, staging_dir, wait_pids):
+    """
+    Plan B puro en cmd.exe si PowerShell no estuviera disponible en el equipo.
+    Usa 'copy /b /y' que sobrescribe in-place sin eliminar el archivo ni perder su sitio en el Escritorio.
+    """
+    bat_path = os.path.join(staging_dir, "updater.bat")
+    workdir = os.path.dirname(target_exe) or "."
+    pid_wait_lines = []
+    for pid in wait_pids:
+        pid_wait_lines.append(
+            f'for /L %%i in (1,1,40) do ('
+            f'tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul '
+            f'&& (ping -n 1 -w 250 127.0.0.1 >nul) || goto :pid_{pid}_done'
+            f')\r\n:pid_{pid}_done'
+        )
+    pid_block = "\r\n".join(pid_wait_lines)
+
+    bat_content = (
+        "@echo off\r\n"
+        "chcp 65001 >nul\r\n"
+        f"{pid_block}\r\n"
+        'copy /b /y "{target}" "{backup}" >nul 2>&1\r\n'
+        "set OK=0\r\n"
+        "for /L %%i in (1,1,30) do (\r\n"
+        '    copy /b /y "{new}" "{target}" >nul 2>&1 && (set OK=1 & goto :copied)\r\n'
+        "    ping -n 1 -w 250 127.0.0.1 >nul\r\n"
+        ")\r\n"
+        ":copied\r\n"
+        'if "%OK%"=="0" (\r\n'
+        '    if exist "{backup}" copy /b /y "{backup}" "{target}" >nul 2>&1\r\n'
+        ")\r\n"
+        "set _MEIPASS=\r\n"
+        "set _MEIPASS2=\r\n"
+        "set _PYI_APPLICATION_HOME_DIR=\r\n"
+        "set _PYI_ARCHIVE_FILE=\r\n"
+        "set _PYI_PARENT_PROCESS_LEVEL=\r\n"
+        "set _PYI_SPLASH_IPC=\r\n"
+        "set TCL_LIBRARY=\r\n"
+        "set TK_LIBRARY=\r\n"
+        'start "" /D "{workdir}" "{target}" --updated --cleanup-update "{staging}"\r\n'
+        'del /f /q "{new}" >nul 2>&1\r\n'
+        'del /f /q "{backup}" >nul 2>&1\r\n'
+        "exit /b 0\r\n"
+    ).format(
+        target=target_exe,
+        new=new_exe,
+        backup=backup_exe,
+        workdir=workdir,
+        staging=staging_dir,
+    )
+
+    with open(bat_path, "w", encoding="utf-8") as f:
+        f.write(bat_content)
+
+    subprocess.Popen(
+        ["cmd.exe", "/d", "/c", bat_path],
+        creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
+        env=_build_clean_subprocess_env(),
+        close_fds=True,
+    )
+
+
+def launch_inplace_updater(target_exe, new_exe, staging_dir, target_version=""):
+    """
+    Lanza el actualizador independiente que:
+      1. Espera a que termine WinLock (y su bootloader PyInstaller).
+      2. Guarda copia de seguridad en %TEMP% (nunca ensucia el Escritorio).
+      3. Sobrescribe el .exe IN-PLACE (mantiene nombre exacto, posición en el Escritorio,
+         atributos y fecha de creación).
+      4. Solicita elevación UAC automáticamente solo si el directorio está protegido (ej. Program Files).
+      5. Hace rollback automático si falla la escritura o el relanzamiento.
+      6. Relanza el .exe actualizado con el entorno limpio.
+    """
+    target_exe = os.path.abspath(target_exe)
+    new_exe = os.path.abspath(new_exe)
+    staging_dir = os.path.abspath(staging_dir)
+    backup_exe = os.path.join(staging_dir, "WinLock_backup.exe")
+    manifest_path = os.path.join(staging_dir, "manifest.json")
+    ps_path = os.path.join(staging_dir, "updater.ps1")
+
+    wait_pids = _collect_self_pids(target_exe)
+    manifest = {
+        "target_exe": target_exe,
+        "new_exe": new_exe,
+        "backup_exe": backup_exe,
+        "staging_dir": staging_dir,
+        "working_dir": os.path.dirname(target_exe) or ".",
+        "log_path": UPDATER_LOG_PATH,
+        "wait_pids": wait_pids,
+        "target_version": str(target_version or ""),
+    }
+
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+    ps_script = r"""param(
+    [Parameter(Mandatory=$true)]
+    [string]$ManifestPath,
+    [switch]$Elevated
+)
+
+$ErrorActionPreference = "Stop"
+
+$manifest = $null
+try {
+    $manifest = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+} catch {
+    exit 1
+}
+
+$targetExe  = [string]$manifest.target_exe
+$newExe     = [string]$manifest.new_exe
+$backupExe  = [string]$manifest.backup_exe
+$stagingDir = [string]$manifest.staging_dir
+$workingDir = [string]$manifest.working_dir
+$logPath    = [string]$manifest.log_path
+$waitPids   = @($manifest.wait_pids)
+
+function Write-UpdateLog {
+    param([string]$Message)
+    try {
+        $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
+        Add-Content -LiteralPath $logPath -Value "[$ts] [Updater] $Message" -Encoding UTF8 -ErrorAction SilentlyContinue
+    } catch {}
+}
+
+function Copy-InPlace {
+    param(
+        [Parameter(Mandatory=$true)][string]$SourcePath,
+        [Parameter(Mandatory=$true)][string]$DestPath
+    )
+    $src = $null
+    $dst = $null
+    try {
+        $src = [System.IO.File]::Open(
+            $SourcePath,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::Read
+        )
+        if (Test-Path -LiteralPath $DestPath) {
+            # FileMode.Open preserva la entrada de directorio, nombre exacto y posición del icono en el Escritorio
+            $dst = [System.IO.File]::Open(
+                $DestPath,
+                [System.IO.FileMode]::Open,
+                [System.IO.FileAccess]::Write,
+                [System.IO.FileShare]::None
+            )
+        } else {
+            $dst = [System.IO.File]::Open(
+                $DestPath,
+                [System.IO.FileMode]::Create,
+                [System.IO.FileAccess]::Write,
+                [System.IO.FileShare]::None
+            )
+        }
+        $dst.Position = 0
+        $src.CopyTo($dst, 65536)
+        $dst.SetLength($src.Length)
+        $dst.Flush($true)
+    } finally {
+        if ($null -ne $dst) { $dst.Dispose() }
+        if ($null -ne $src) { $src.Dispose() }
+    }
+}
+
+function Clear-PyInstallerEnv {
+    foreach ($v in @(
+        "_MEIPASS", "_MEIPASS2", "_PYI_APPLICATION_HOME_DIR",
+        "_PYI_ARCHIVE_FILE", "_PYI_PARENT_PROCESS_LEVEL",
+        "_PYI_SPLASH_IPC", "TCL_LIBRARY", "TK_LIBRARY"
+    )) {
+        [Environment]::SetEnvironmentVariable($v, $null, "Process")
+    }
+}
+
+function Start-TargetApp {
+    param([bool]$PassUpdatedArgs)
+    Clear-PyInstallerEnv
+    $argStr = ""
+    if ($PassUpdatedArgs) {
+        $argStr = '--updated --cleanup-update "' + $stagingDir + '"'
+    }
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
+        try {
+            if ($argStr) {
+                Start-Process -FilePath $targetExe -ArgumentList $argStr -WorkingDirectory $workingDir
+            } else {
+                Start-Process -FilePath $targetExe -WorkingDirectory $workingDir
+            }
+            return $true
+        } catch {
+            Write-UpdateLog "Reintento $attempt lanzando '$targetExe' fallido: $($_.Exception.Message)"
+            Start-Sleep -Milliseconds 400
+        }
+    }
+    return $false
+}
+
+Write-UpdateLog "Iniciando actualizacion in-place de '$targetExe' (Elevated=$Elevated)"
+
+# 1. Esperar cierre limpio de WinLock (y su bootloader PyInstaller si es --onefile)
+$deadline = (Get-Date).AddSeconds(10)
+while ((Get-Date) -lt $deadline) {
+    $stillRunning = $false
+    foreach ($p in $waitPids) {
+        if ($p -gt 0) {
+            $proc = Get-Process -Id $p -ErrorAction SilentlyContinue
+            if ($null -ne $proc -and -not $proc.HasExited) {
+                $stillRunning = $true
+                break
+            }
+        }
+    }
+    if (-not $stillRunning) { break }
+    Start-Sleep -Milliseconds 100
+}
+
+foreach ($p in $waitPids) {
+    if ($p -gt 0) {
+        $proc = Get-Process -Id $p -ErrorAction SilentlyContinue
+        if ($null -ne $proc -and -not $proc.HasExited) {
+            Write-UpdateLog "Finalizando PID residual $p"
+            Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+Start-Sleep -Milliseconds 180
+
+if (-not (Test-Path -LiteralPath $newExe)) {
+    Write-UpdateLog "ERROR: Ejecutable nuevo no encontrado en '$newExe'."
+    exit 1
+}
+
+$expectedLen = (Get-Item -LiteralPath $newExe -Force).Length
+$origCreationUtc = $null
+$origAttributes = $null
+$hasBackup = $false
+$needsElevation = $false
+
+# 2. Guardar metadatos y respaldo en %TEMP% (nunca crear archivos en el Escritorio)
+if (Test-Path -LiteralPath $targetExe) {
+    try {
+        $fi = Get-Item -LiteralPath $targetExe -Force
+        $origCreationUtc = $fi.CreationTimeUtc
+        $origAttributes = $fi.Attributes
+        if (($origAttributes -band [System.IO.FileAttributes]::ReadOnly) -ne 0) {
+            try {
+                [System.IO.File]::SetAttributes(
+                    $targetExe,
+                    ($origAttributes -band (-bnot [System.IO.FileAttributes]::ReadOnly))
+                )
+            } catch [System.UnauthorizedAccessException] {
+                if (-not $Elevated) { $needsElevation = $true }
+            }
+        }
+        [System.IO.File]::Copy($targetExe, $backupExe, $true)
+        $hasBackup = $true
+    } catch {
+        Write-UpdateLog "Aviso preparando respaldo/metadatos: $($_.Exception.Message)"
+    }
+}
+
+# 3. Sobrescritura estrictamente IN-PLACE con reintentos (OneDrive/Defender/desmontaje de imagen)
+$replaced = $false
+$unauthCount = 0
+$lastErr = ""
+
+if (-not $needsElevation) {
+    for ($i = 1; $i -le 40; $i++) {
+        try {
+            Copy-InPlace -SourcePath $newExe -DestPath $targetExe
+            $writtenLen = (Get-Item -LiteralPath $targetExe -Force).Length
+            if ($writtenLen -ne $expectedLen) {
+                throw "Tamano escrito ($writtenLen) distinto al esperado ($expectedLen)."
+            }
+            $replaced = $true
+            break
+        } catch [System.UnauthorizedAccessException] {
+            $lastErr = $_.Exception.Message
+            $unauthCount++
+            if (-not $Elevated -and $unauthCount -ge 6) {
+                $needsElevation = $true
+                break
+            }
+            Start-Sleep -Milliseconds 250
+        } catch {
+            $lastErr = $_.Exception.Message
+            Start-Sleep -Milliseconds 250
+        }
+    }
+}
+
+# 4. Si la carpeta esta protegida (ej. Program Files), elevar via UAC automaticamente
+if ($needsElevation) {
+    Write-UpdateLog "Permisos insuficientes para '$targetExe'. Solicitando elevacion UAC."
+    $psExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    if (-not (Test-Path -LiteralPath $psExe)) { $psExe = "powershell.exe" }
+    $elevArgs = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $PSCommandPath + '" -ManifestPath "' + $ManifestPath + '" -Elevated'
+    try {
+        Start-Process -FilePath $psExe -Verb RunAs -WindowStyle Hidden -ArgumentList $elevArgs
+        exit 0
+    } catch {
+        Write-UpdateLog "Elevacion UAC cancelada o fallida: $($_.Exception.Message)"
+        Start-TargetApp -PassUpdatedArgs $false | Out-Null
+        exit 1
+    }
+}
+
+# 5. Rollback automatico si fallo el reemplazo
+if (-not $replaced) {
+    Write-UpdateLog "ERROR reemplazando '$targetExe': $lastErr"
+    if ($hasBackup -and (Test-Path -LiteralPath $backupExe)) {
+        Write-UpdateLog "Restaurando ejecutable original desde respaldo..."
+        for ($r = 1; $r -le 10; $r++) {
+            try {
+                Copy-InPlace -SourcePath $backupExe -DestPath $targetExe
+                Write-UpdateLog "Respaldo restaurado correctamente."
+                break
+            } catch {
+                Start-Sleep -Milliseconds 250
+            }
+        }
+    }
+    Start-TargetApp -PassUpdatedArgs $false | Out-Null
+    exit 1
+}
+
+# 6. Restaurar fecha de creacion y atributos originales
+if ($null -ne $origCreationUtc) {
+    try { [System.IO.File]::SetCreationTimeUtc($targetExe, $origCreationUtc) } catch {}
+}
+if ($null -ne $origAttributes) {
+    try { [System.IO.File]::SetAttributes($targetExe, $origAttributes) } catch {}
+}
+try { Unblock-File -LiteralPath $targetExe -ErrorAction SilentlyContinue } catch {}
+
+Write-UpdateLog "Actualizacion in-place completada ($expectedLen bytes). Relanzando '$targetExe'."
+
+# 7. Relanzar la nueva version (con rollback si fallara el arranque)
+$launched = Start-TargetApp -PassUpdatedArgs $true
+if (-not $launched -and $hasBackup -and (Test-Path -LiteralPath $backupExe)) {
+    Write-UpdateLog "No se pudo arrancar la nueva version. Ejecutando rollback..."
+    try {
+        Copy-InPlace -SourcePath $backupExe -DestPath $targetExe
+        Start-TargetApp -PassUpdatedArgs $false | Out-Null
+    } catch {}
+}
+
+Remove-Item -LiteralPath $newExe -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $backupExe -Force -ErrorAction SilentlyContinue
+exit 0
+"""
+
+    # UTF-8 con BOM para compatibilidad total con tildes y rutas Unicode en PowerShell 5.1
+    with open(ps_path, "w", encoding="utf-8-sig") as f:
+        f.write(ps_script)
+
+    # Liberar el mutex antes de lanzar el actualizador para evitar bloqueo en el reinicio
+    release_single_instance_mutex()
+
+    ps_exe = os.path.join(
+        os.environ.get("SystemRoot", r"C:\Windows"),
+        "System32",
+        "WindowsPowerShell",
+        "v1.0",
+        "powershell.exe",
+    )
+    if not os.path.isfile(ps_exe):
+        ps_exe = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
+
+    if ps_exe:
+        try:
+            subprocess.Popen(
+                [
+                    ps_exe,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-WindowStyle",
+                    "Hidden",
+                    "-File",
+                    ps_path,
+                    "-ManifestPath",
+                    manifest_path,
+                ],
+                creationflags=DETACHED_PROCESS
+                | CREATE_NEW_PROCESS_GROUP
+                | CREATE_NO_WINDOW,
+                env=_build_clean_subprocess_env(),
+                close_fds=True,
+            )
+            write_log(f"Actualizador PowerShell iniciado (PIDs monitorizados: {wait_pids}).")
+            return
+        except Exception as ps_err:
+            write_log(f"No se pudo iniciar PowerShell ({ps_err}); usando fallback cmd.exe.")
+
+    _launch_cmd_updater_fallback(target_exe, new_exe, backup_exe, staging_dir, wait_pids)
+    write_log(f"Actualizador cmd.exe fallback iniciado (PIDs monitorizados: {wait_pids}).")
+
+
 def show_startup_and_check_updates():
     """
     Muestra una ventana de carga mientras comprueba actualizaciones en segundo plano.
+    Al pulsar 'Actualizar', descarga, verifica e instala in-place sin ir a la web.
     Devuelve True si se inició una actualización y el programa debe salir.
     """
     splash = tk.Tk()
     splash.title("WinLock")
-    splash.geometry("390x170")
     splash.resizable(False, False)
 
     try:
@@ -2466,13 +3230,17 @@ def show_startup_and_check_updates():
     except Exception:
         pass
 
-    splash.update_idletasks()
-    x = (splash.winfo_screenwidth() // 2) - (390 // 2)
-    y = (splash.winfo_screenheight() // 2) - (170 // 2)
-    splash.geometry(f"390x170+{x}+{y}")
+    def resize_and_center(min_w=430, min_h=175):
+        splash.update_idletasks()
+        w = max(min_w, splash.winfo_reqwidth())
+        h = max(min_h, splash.winfo_reqheight())
+        x = (splash.winfo_screenwidth() // 2) - (w // 2)
+        y = (splash.winfo_screenheight() // 2) - (h // 2)
+        splash.geometry(f"{w}x{h}+{x}+{y}")
 
     style = ttk.Style(splash)
     style.theme_use("clam")
+    style.configure("Primary.TButton", font=("Segoe UI", 9, "bold"))
 
     container = ttk.Frame(splash, padding="20 18 20 18")
     container.pack(expand=True, fill=tk.BOTH)
@@ -2488,7 +3256,7 @@ def show_startup_and_check_updates():
         container,
         text="Comprobando actualizaciones...",
         font=("Segoe UI", 9),
-        foreground="#666",
+        foreground="#555555",
     )
     status_label.pack(anchor="w", pady=(5, 10))
 
@@ -2496,10 +3264,30 @@ def show_startup_and_check_updates():
     progress.pack(fill=tk.X)
     progress.start(12)
 
-    state = {"result": None, "done": False, "closed": False, "updating": False}
+    resize_and_center(410, 155)
+
+    state = {
+        "result": None,
+        "done": False,
+        "closed": False,
+        "updating": False,
+        "cancel_event": threading.Event(),
+        "staging_dir": None,
+    }
+
+    def cleanup_current_staging():
+        sdir = state.get("staging_dir")
+        if sdir and not state["updating"]:
+            state["staging_dir"] = None
+            try:
+                shutil.rmtree(sdir, ignore_errors=True)
+            except Exception:
+                pass
 
     def close_splash():
         state["closed"] = True
+        state["cancel_event"].set()
+        cleanup_current_staging()
         try:
             if splash.winfo_exists():
                 splash.destroy()
@@ -2511,7 +3299,12 @@ def show_startup_and_check_updates():
     def check_network():
         try:
             req = urllib.request.Request(
-                LATEST_VERSION_JSON, headers={"User-Agent": "WinLock Updater"}
+                LATEST_VERSION_JSON,
+                headers={
+                    "User-Agent": f"WinLock/{LOCAL_VERSION}",
+                    "Cache-Control": "no-cache",
+                    "Pragma": "no-cache",
+                },
             )
             with urllib.request.urlopen(req, timeout=5) as response:
                 state["result"] = json.loads(response.read().decode("utf-8"))
@@ -2523,124 +3316,286 @@ def show_startup_and_check_updates():
 
     threading.Thread(target=check_network, daemon=True).start()
 
-    def run_finalizer_script(old_exe, new_exe, script_path):
-        esc_old = old_exe.replace("'", "''")
-        esc_new = new_exe.replace("'", "''")
-        esc_script = script_path.replace("'", "''")
-        exe_name = os.path.basename(old_exe)
+    def clear_container():
+        for w in container.winfo_children():
+            w.destroy()
 
-        ps_script = f"""
-param()
-taskkill /f /im "{exe_name}" 2>$null
-$maxRetries = 10
-for ($i=0; $i -lt $maxRetries; $i++) {{
-    try {{
-        Remove-Item -LiteralPath '{esc_old}' -Force -ErrorAction Stop
-        break
-    }} catch {{
-        Start-Sleep -Seconds 1
-    }}
-}}
-Move-Item -LiteralPath '{esc_new}' -Destination '{esc_old}' -Force -ErrorAction SilentlyContinue
-Start-Process -FilePath '{esc_old}'
-Start-Sleep -Seconds 1
-Remove-Item -LiteralPath '{esc_script}' -Force -ErrorAction SilentlyContinue
-"""
-        with open(script_path, "w", encoding="utf-8") as f:
-            f.write(ps_script)
+    def show_error_view(latest_info, error_text):
+        if state["closed"] or not splash.winfo_exists():
+            return
+        cleanup_current_staging()
+        clear_container()
 
-        subprocess.Popen(
-            [
-                "powershell",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-WindowStyle",
-                "Hidden",
-                "-File",
-                script_path,
-            ],
-            creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+        ttk.Label(
+            container,
+            text="No se pudo completar la actualización",
+            font=("Segoe UI", 11, "bold"),
+            foreground="#b91c1c",
+        ).pack(anchor="w")
+
+        ttk.Label(
+            container,
+            text=error_text,
+            font=("Segoe UI", 9),
+            foreground="#444444",
+            wraplength=390,
+            justify="left",
+        ).pack(anchor="w", pady=(6, 12))
+
+        btn_row = ttk.Frame(container)
+        btn_row.pack(fill=tk.X)
+
+        def open_manual_site():
+            webbrowser.open(UPDATE_URL)
+            close_splash()
+
+        ttk.Button(
+            btn_row,
+            text="Abrir web",
+            command=open_manual_site,
+        ).pack(side=tk.LEFT)
+
+        ttk.Button(
+            btn_row,
+            text="Reintentar",
+            style="Primary.TButton",
+            command=lambda: start_autoupdate(latest_info),
+        ).pack(side=tk.RIGHT, padx=(6, 0))
+
+        ttk.Button(
+            btn_row,
+            text="Continuar",
+            command=close_splash,
+        ).pack(side=tk.RIGHT)
+
+        resize_and_center(435, 175)
+
+    def start_autoupdate(latest_info):
+        if state["closed"] or not splash.winfo_exists():
+            return
+
+        is_frozen = bool(getattr(sys, "frozen", False))
+        remote_tag = str(latest_info.get("tag_name") or "").strip()
+        dl_url = str(latest_info.get("download_url") or "").strip()
+        declared_size_bytes = parse_human_size(latest_info.get("size"))
+        expected_sha256 = latest_info.get("sha256")
+
+        if is_frozen:
+            target_exe = os.path.abspath(sys.executable)
+        else:
+            # En modo desarrollo (.py) nunca sobrescribir python.exe: descargar WinLock.exe en la carpeta del script
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            target_exe = os.path.join(script_dir, "WinLock.exe")
+
+        # Comprobar espacio libre antes de descargar
+        try:
+            temp_root = tempfile.gettempdir()
+            needed_bytes = max(30 * 1024 * 1024, int(declared_size_bytes * 2.5))
+            if shutil.disk_usage(temp_root).free < needed_bytes:
+                show_error_view(
+                    latest_info,
+                    "No hay suficiente espacio libre en la unidad temporal para descargar la actualización.",
+                )
+                return
+        except Exception:
+            pass
+
+        state["cancel_event"] = threading.Event()
+        cancel_ev = state["cancel_event"]
+
+        clear_container()
+
+        heading = ttk.Label(
+            container,
+            text=f"Actualizando a WinLock {remote_tag}...",
+            font=("Segoe UI", 11, "bold"),
         )
+        heading.pack(anchor="w")
+
+        pb = ttk.Progressbar(
+            container,
+            orient="horizontal",
+            mode="indeterminate" if not declared_size_bytes else "determinate",
+            maximum=100,
+        )
+        pb.pack(fill=tk.X, pady=(10, 6))
+        if not declared_size_bytes:
+            pb.start(12)
+
+        st = ttk.Label(
+            container,
+            text="Conectando con el servidor...",
+            font=("Segoe UI", 9),
+            foreground="#555555",
+        )
+        st.pack(anchor="w")
+
+        footer = ttk.Frame(container)
+        footer.pack(fill=tk.X, pady=(10, 0))
+
+        cancel_btn = ttk.Button(
+            footer,
+            text="Cancelar",
+            command=close_splash,
+        )
+        cancel_btn.pack(side=tk.RIGHT)
+
+        resize_and_center(435, 175)
+
+        ui_state = {"indeterminate": not bool(declared_size_bytes)}
+
+        def update_ui(pct, text):
+            if state["closed"] or not splash.winfo_exists():
+                return
+            if pct is None:
+                if not ui_state["indeterminate"]:
+                    pb.config(mode="indeterminate")
+                    pb.start(12)
+                    ui_state["indeterminate"] = True
+            else:
+                if ui_state["indeterminate"]:
+                    pb.stop()
+                    pb.config(mode="determinate")
+                    ui_state["indeterminate"] = False
+                pb["value"] = max(0, min(100, pct))
+            st.config(text=text)
+
+        def finalize_install(new_exe, staging_dir):
+            if state["closed"] or cancel_ev.is_set():
+                cleanup_current_staging()
+                return
+            try:
+                cancel_btn.config(state="disabled")
+                update_ui(100, "Instalando y reiniciando WinLock...")
+                splash.update_idletasks()
+
+                if is_frozen:
+                    state["updating"] = True
+                    launch_inplace_updater(
+                        target_exe=target_exe,
+                        new_exe=new_exe,
+                        staging_dir=staging_dir,
+                        target_version=remote_tag,
+                    )
+                    close_splash()
+                else:
+                    # Modo .py: guardar el ejecutable validado sin tocar python.exe
+                    shutil.copy2(new_exe, target_exe)
+                    cleanup_current_staging()
+                    messagebox.showinfo(
+                        "Actualización descargada - WinLock",
+                        f"Se ha descargado WinLock {remote_tag} en:\n{target_exe}\n\n"
+                        "Ejecute ese archivo .exe para usar la nueva versión.",
+                        parent=splash,
+                    )
+                    close_splash()
+            except Exception as inst_err:
+                state["updating"] = False
+                write_log(f"Error lanzando instalador in-place: {inst_err}")
+                show_error_view(
+                    latest_info,
+                    f"La descarga se completó, pero no se pudo aplicar la actualización:\n{inst_err}",
+                )
+
+        def download_worker():
+            staging_dir = os.path.join(
+                tempfile.gettempdir(),
+                f"{UPDATE_STAGING_PREFIX}{uuid.uuid4().hex[:10]}",
+            )
+            state["staging_dir"] = staging_dir
+            try:
+                os.makedirs(staging_dir, exist_ok=True)
+                staged_exe = os.path.join(staging_dir, "WinLock_new.exe")
+
+                def on_progress(pct, text):
+                    if not state["closed"] and not cancel_ev.is_set():
+                        splash.after(0, update_ui, pct, text)
+
+                _, server_len = download_file_resilient(
+                    url=dl_url,
+                    dest_path=staged_exe,
+                    declared_size_bytes=declared_size_bytes,
+                    cancel_event=cancel_ev,
+                    progress_cb=on_progress,
+                    max_retries=3,
+                )
+
+                if cancel_ev.is_set() or state["closed"]:
+                    return
+
+                splash.after(0, update_ui, 100, "Verificando integridad del ejecutable...")
+                validate_pe_executable(
+                    file_path=staged_exe,
+                    expected_content_length=server_len,
+                    declared_size_bytes=declared_size_bytes,
+                    expected_sha256=expected_sha256,
+                )
+
+                if cancel_ev.is_set() or state["closed"]:
+                    return
+
+                splash.after(0, finalize_install, staged_exe, staging_dir)
+
+            except InterruptedError:
+                write_log("Autoactualización cancelada por el usuario.")
+                cleanup_current_staging()
+            except Exception as ex:
+                write_log(f"Error durante la autoactualización: {ex}")
+                if not state["closed"] and not cancel_ev.is_set():
+                    splash.after(
+                        0,
+                        show_error_view,
+                        latest_info,
+                        f"Ocurrió un error al descargar o verificar la actualización:\n{ex}",
+                    )
+
+        threading.Thread(target=download_worker, daemon=True).start()
 
     def prompt_update(latest_info):
         progress.stop()
-        progress.destroy()
-        remote_tag = latest_info.get("tag_name")
-        title_label.config(text="¡Actualización disponible!")
-        status_label.config(
-            text=f"Versión actual: {LOCAL_VERSION}  →  Disponible: {remote_tag}\n¿Desea actualizar ahora?"
-        )
+        clear_container()
+
+        remote_tag = str(latest_info.get("tag_name") or "").strip()
+        size_text = str(latest_info.get("size") or "").strip()
+        size_suffix = f"  ({size_text})" if size_text else ""
+
+        ttk.Label(
+            container,
+            text="¡Actualización disponible!",
+            font=("Segoe UI", 12, "bold"),
+        ).pack(anchor="w")
+
+        ttk.Label(
+            container,
+            text=(
+                f"Versión actual: {LOCAL_VERSION}  →  Disponible: {remote_tag}{size_suffix}\n"
+                "Se actualizará automáticamente manteniendo el mismo archivo y ubicación."
+            ),
+            font=("Segoe UI", 9),
+            foreground="#444444",
+            wraplength=390,
+            justify="left",
+        ).pack(anchor="w", pady=(6, 14))
 
         btn_box = ttk.Frame(container)
-        btn_box.pack(fill=tk.X, pady=(10, 0))
+        btn_box.pack(fill=tk.X)
 
-        def proceed_download():
-            if not getattr(sys, "frozen", False):
-                webbrowser.open(UPDATE_URL)
-                close_splash()
-                return
-
-            for w in container.winfo_children():
-                w.destroy()
-
-            ttk.Label(
-                container,
-                text="Descargando actualización...",
-                font=("Segoe UI", 10, "bold"),
-            ).pack(anchor="w")
-            pb = ttk.Progressbar(container, orient="horizontal", mode="determinate")
-            pb.pack(fill=tk.X, pady=(10, 5))
-            st = ttk.Label(container, text="Conectando...", font=("Segoe UI", 8))
-            st.pack(anchor="w")
-
-            def update_ui(pct, text):
-                if not state["closed"] and splash.winfo_exists():
-                    pb["value"] = pct
-                    st.config(text=text)
-
-            def finish_install(new_exe, ps_path):
-                if state["closed"]:
-                    return
-                state["updating"] = True
-                run_finalizer_script(os.path.abspath(sys.executable), new_exe, ps_path)
-                close_splash()
-
-            def download_thread():
-                try:
-                    temp_dir = os.environ.get("TEMP", ".")
-                    new_exe = os.path.join(
-                        temp_dir, f"winlock_new_{random.randint(1000, 9999)}.exe"
-                    )
-                    ps_path = os.path.join(
-                        temp_dir, f"updater_{random.randint(1000, 9999)}.ps1"
-                    )
-
-                    def reporthook(blocks, block_size, total):
-                        if state["closed"]:
-                            raise InterruptedError("Descarga cancelada por el usuario")
-                        if total > 0:
-                            done = min(blocks * block_size, total)
-                            pct = int(done * 100 / total)
-                            txt = f"{done / 1048576:.1f} MB / {total / 1048576:.1f} MB ({pct}%)"
-                            splash.after(0, update_ui, pct, txt)
-
-                    urllib.request.urlretrieve(
-                        latest_info["download_url"], new_exe, reporthook
-                    )
-                    splash.after(0, update_ui, 100, "Instalando y reiniciando...")
-                    time.sleep(0.5)
-                    splash.after(0, finish_install, new_exe, ps_path)
-                except Exception as ex:
-                    write_log(f"Error descargando actualización: {ex}")
-                    splash.after(0, close_splash)
-
-            threading.Thread(target=download_thread, daemon=True).start()
-
-        ttk.Button(btn_box, text="Actualizar", command=proceed_download).pack(
-            side=tk.RIGHT, padx=5
+        update_btn = ttk.Button(
+            btn_box,
+            text="Actualizar ahora",
+            style="Primary.TButton",
+            command=lambda: start_autoupdate(latest_info),
         )
-        ttk.Button(btn_box, text="Más tarde", command=close_splash).pack(side=tk.RIGHT)
+        update_btn.pack(side=tk.RIGHT, padx=(6, 0))
+
+        ttk.Button(
+            btn_box,
+            text="Más tarde",
+            command=close_splash,
+        ).pack(side=tk.RIGHT)
+
+        resize_and_center(435, 175)
+        update_btn.focus_set()
 
     def monitor_progress():
         if state["closed"] or not splash.winfo_exists():
@@ -2652,7 +3607,7 @@ Remove-Item -LiteralPath '{esc_script}' -Force -ErrorAction SilentlyContinue
             if (
                 remote_tag
                 and dl_url
-                and str(dl_url).startswith("https://")
+                and str(dl_url).strip().lower().startswith("https://")
                 and parse_version(remote_tag) > parse_version(LOCAL_VERSION)
             ):
                 prompt_update(info)
@@ -2702,6 +3657,17 @@ def full_emergency_restore(explicit_restore=False):
 
 
 if __name__ == "__main__":
+    # Limpieza silenciosa de la carpeta temporal tras completar una autoactualización
+    if "--cleanup-update" in sys.argv:
+        try:
+            idx = sys.argv.index("--cleanup-update")
+            if idx + 1 < len(sys.argv):
+                cleanup_update_staging_dir(sys.argv[idx + 1], delay_seconds=1.5)
+        except Exception:
+            pass
+
+    just_updated = "--updated" in sys.argv
+
     # Modo silencioso de recuperación tras corte eléctrico, fallo o ejecución manual
     if "--restore" in sys.argv:
         write_log(
@@ -2717,7 +3683,11 @@ if __name__ == "__main__":
 
     atexit.register(full_emergency_restore)
 
-    mutex_handle, is_first_instance = acquire_single_instance_mutex()
+    # Si venimos de reiniciar tras actualizar, dar un margen breve para que termine el proceso anterior
+    mutex_handle, is_first_instance = acquire_single_instance_mutex(
+        retries=25 if just_updated else 0,
+        retry_delay=0.15,
+    )
     if not is_first_instance:
         _r = tk.Tk()
         _r.withdraw()
@@ -2725,9 +3695,14 @@ if __name__ == "__main__":
         _r.destroy()
         sys.exit(0)
 
-    write_log(f"\n{'='*50}\nIniciando sesión de WinLock {LOCAL_VERSION}")
+    write_log(
+        f"\n{'='*50}\nIniciando sesión de WinLock {LOCAL_VERSION}"
+        + (" (recién actualizado)" if just_updated else "")
+    )
 
-    if show_startup_and_check_updates():
+    # Si acaba de actualizarse, evitar comprobación redundante y posibles bucles de versión
+    if not just_updated and show_startup_and_check_updates():
+        release_single_instance_mutex()
         sys.exit(0)
 
     app_instance = None
@@ -2744,4 +3719,5 @@ if __name__ == "__main__":
             app_instance._quit_app()
         else:
             full_emergency_restore()
+        release_single_instance_mutex()
         sys.exit(0)
