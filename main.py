@@ -1,4 +1,4 @@
-LOCAL_VERSION = "v1.0"
+LOCAL_VERSION = "v1.1"
 
 import os
 import sys
@@ -24,6 +24,65 @@ LOG_FILE_PATH = os.path.join(LOG_DIRECTORY, LOG_FILE_NAME)
 UPDATER_LOG_PATH = os.path.join(LOG_DIRECTORY, "updater.log")
 RESTORE_STATE_PATH = os.path.join(LOG_DIRECTORY, "restore_state.json")
 _log_lock = threading.Lock()
+
+LOG_RETENTION_SECONDS = 14 * 24 * 60 * 60
+LOG_CLEANUP_INTERVAL = 60 * 60
+
+
+def cleanup_old_logs():
+    try:
+        if os.path.basename(os.path.normpath(LOG_DIRECTORY)) != LOG_FOLDER_NAME:
+            return
+        if not os.path.isdir(LOG_DIRECTORY):
+            return
+        if os.path.islink(LOG_DIRECTORY) or os.path.isjunction(LOG_DIRECTORY):
+            return
+        cutoff = time.time() - LOG_RETENTION_SECONDS
+        with _log_lock:
+            with os.scandir(LOG_DIRECTORY) as entries:
+                for entry in entries:
+                    try:
+                        if not (
+                            (
+                                entry.name.startswith("logs-")
+                                and entry.name.endswith(".txt")
+                            )
+                            or entry.name == "updater.log"
+                        ):
+                            continue
+                        if entry.name == LOG_FILE_NAME:
+                            continue
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                        stat = entry.stat(follow_symlinks=False)
+                        if getattr(stat, "st_file_attributes", 0) & 0x400:
+                            continue
+                        if stat.st_mtime < cutoff:
+                            os.unlink(entry.path)
+                    except Exception:
+                        continue
+    except Exception:
+        pass
+
+
+def _log_cleanup_worker():
+    while True:
+        try:
+            cleanup_old_logs()
+        except Exception:
+            pass
+
+        time.sleep(LOG_CLEANUP_INTERVAL)
+
+
+try:
+    threading.Thread(
+        target=_log_cleanup_worker,
+        name="WinLock-LogCleanup",
+        daemon=True,
+    ).start()
+except Exception:
+    pass
 
 
 def write_log(message, *, level="INFO", error=None):
@@ -602,6 +661,7 @@ BLOCKED_SYSCOMMANDS = {
 
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 DETACHED_PROCESS = 0x00000008
+CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 CREATE_NO_WINDOW = 0x08000000
 LATEST_VERSION_JSON = (
     "https://raw.githubusercontent.com/enderhacker/WinLock/refs/heads/main/version.json"
@@ -3607,13 +3667,28 @@ def _launch_cmd_updater_fallback(target_exe, new_exe, backup_exe, staging_dir, w
     with open(bat_path, "w", encoding="utf-8") as f:
         f.write(bat_content)
 
-    subprocess.Popen(
-        ["cmd.exe", "/d", "/c", bat_path],
-        creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
-        env=_build_clean_subprocess_env(),
-        close_fds=True,
-    )
+    _spawn_detached_updater(["cmd.exe", "/d", "/c", bat_path], env=_build_clean_subprocess_env())
 
+def _spawn_detached_updater(cmd, env):
+    """Lanza el proceso actualizador escapando del Job Object de Nuitka --onefile."""
+    base_flags = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+    try:
+        return subprocess.Popen(
+            cmd,
+            creationflags=base_flags | CREATE_BREAKAWAY_FROM_JOB,
+            env=env,
+            close_fds=True,
+        )
+    except OSError as e:
+        # Si un Job Object superior prohíbe breakaway (ERROR_ACCESS_DENIED = 5), reintentar sin él
+        if getattr(e, "winerror", None) == 5:
+            return subprocess.Popen(
+                cmd,
+                creationflags=base_flags,
+                env=env,
+                close_fds=True,
+            )
+        raise
 
 def launch_inplace_updater(target_exe, new_exe, staging_dir, target_version=""):
     """Lanza el actualizador independiente que sobrescribe el .exe in-place con rollback."""
@@ -3642,15 +3717,28 @@ def launch_inplace_updater(target_exe, new_exe, staging_dir, target_version=""):
     ps_script = r"""param(
     [Parameter(Mandatory=$true)]
     [string]$ManifestPath,
+    [Parameter(Mandatory=$true)]
+    [string]$LogPath,
     [switch]$Elevated
 )
 
 $ErrorActionPreference = "Stop"
 
+function Write-UpdateLog {
+    param([string]$Message)
+    try {
+        $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
+        Add-Content -LiteralPath $LogPath -Value "[$ts] [Updater] $Message" -Encoding UTF8 -ErrorAction SilentlyContinue
+    } catch {}
+}
+
+Write-UpdateLog "Script PowerShell iniciado (PID=$PID, Elevated=$Elevated)."
+
 $manifest = $null
 try {
     $manifest = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
 } catch {
+    Write-UpdateLog "ERROR leyendo manifest '$ManifestPath': $($_.Exception.Message)"
     exit 1
 }
 
@@ -3659,7 +3747,7 @@ $newExe     = [string]$manifest.new_exe
 $backupExe  = [string]$manifest.backup_exe
 $stagingDir = [string]$manifest.staging_dir
 $workingDir = [string]$manifest.working_dir
-$logPath    = [string]$manifest.log_path
+if ($manifest.log_path) { $LogPath = [string]$manifest.log_path }
 $waitPids   = @($manifest.wait_pids)
 
 function Write-UpdateLog {
@@ -3841,7 +3929,7 @@ if ($needsElevation) {
     Write-UpdateLog "Permisos insuficientes para '$targetExe'. Solicitando elevacion UAC."
     $psExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
     if (-not (Test-Path -LiteralPath $psExe)) { $psExe = "powershell.exe" }
-    $elevArgs = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $PSCommandPath + '" -ManifestPath "' + $ManifestPath + '" -Elevated'
+    $elevArgs = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $PSCommandPath + '" -ManifestPath "' + $ManifestPath + '" -LogPath "' + $LogPath + '" -Elevated'
     try {
         Start-Process -FilePath $psExe -Verb RunAs -WindowStyle Hidden -ArgumentList $elevArgs
         exit 0
@@ -3912,7 +4000,7 @@ exit 0
 
     if ps_exe:
         try:
-            subprocess.Popen(
+            _spawn_detached_updater(
                 [
                     ps_exe,
                     "-NoProfile",
@@ -3924,12 +4012,10 @@ exit 0
                     ps_path,
                     "-ManifestPath",
                     manifest_path,
+                    "-LogPath",
+                    UPDATER_LOG_PATH,
                 ],
-                creationflags=DETACHED_PROCESS
-                | CREATE_NEW_PROCESS_GROUP
-                | CREATE_NO_WINDOW,
                 env=_build_clean_subprocess_env(),
-                close_fds=True,
             )
             write_log(
                 f"Actualizador PowerShell iniciado (PIDs monitorizados: {wait_pids}). "
@@ -3943,7 +4029,6 @@ exit 0
 
     _launch_cmd_updater_fallback(target_exe, new_exe, backup_exe, staging_dir, wait_pids)
     write_log(f"Actualizador cmd.exe fallback iniciado (PIDs monitorizados: {wait_pids}).")
-
 
 def show_startup_and_check_updates():
     """
