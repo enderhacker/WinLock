@@ -1,24 +1,99 @@
 LOCAL_VERSION = "v1.0"
 
+import os
 import sys
+import threading
+import time
+import traceback
+
+LOG_FOLDER_NAME = "WinLock"
+LOG_FILE_NAME = f"logs-{time.strftime('%d_%m_%Y-%H_%M_%S')}-{os.getpid()}.txt"
+
+
+def get_app_data_dir():
+    """Obtiene la carpeta de datos de WinLock."""
+    try:
+        app_data_path = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return os.path.join(app_data_path, LOG_FOLDER_NAME)
+    except Exception:
+        return os.path.abspath(".")
+
+
+LOG_DIRECTORY = get_app_data_dir()
+LOG_FILE_PATH = os.path.join(LOG_DIRECTORY, LOG_FILE_NAME)
+UPDATER_LOG_PATH = os.path.join(LOG_DIRECTORY, "updater.log")
+RESTORE_STATE_PATH = os.path.join(LOG_DIRECTORY, "restore_state.json")
+_log_lock = threading.Lock()
+
+
+def write_log(message, *, level="INFO", error=None):
+    """Escribe un mensaje con contexto y, si se indica, la traza de la excepción."""
+    entry = message
+    try:
+        now = time.time()
+        ms = int((now % 1) * 1000)
+        timestamp = f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now))},{ms:03d}"
+        entry = (
+            f"[{timestamp}] [{level}] [PID {os.getpid()}:{threading.current_thread().name}] "
+            f"- {message}\n"
+        )
+        if error is not None:
+            entry += "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        with _log_lock:
+            with open(LOG_FILE_PATH, "a", encoding="utf-8", errors="backslashreplace") as log_file:
+                log_file.write(entry)
+    except Exception as log_error:
+        try:
+            if sys.stderr is not None:
+                print(f"Error al escribir en el log: {log_error}\n{entry}", file=sys.stderr)
+        except Exception:
+            pass
+
+
+def _log_uncaught_exception(exc_type, exc_value, exc_traceback):
+    if not issubclass(exc_type, KeyboardInterrupt):
+        write_log("Excepción no controlada en el hilo principal.", level="ERROR", error=exc_value)
+    sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+
+def _log_thread_exception(args):
+    if not issubclass(args.exc_type, SystemExit):
+        write_log("Excepción no controlada en un hilo de trabajo.", level="ERROR", error=args.exc_value)
+    threading.__excepthook__(args)
+
+
+try:
+    os.makedirs(LOG_DIRECTORY, exist_ok=True)
+except OSError as e:
+    print(f"No se pudo crear la carpeta de logs {LOG_DIRECTORY}: {e}", file=sys.stderr)
+
+if __name__ == "__main__":
+    sys.excepthook = _log_uncaught_exception
+    threading.excepthook = _log_thread_exception
+    write_log(f"Iniciando WinLock {LOCAL_VERSION} (Python {sys.version.split()[0]}).")
 
 try:
     import ctypes
     import ctypes.wintypes
     import hashlib
     import json
-    import os
     import ssl
     import subprocess
-    import threading
-    import time
     import tkinter as tk
     from tkinter import messagebox, ttk
     import urllib.request
     import winreg
 except ImportError as e:
+    write_log("Faltan bibliotecas necesarias para iniciar WinLock.", level="ERROR", error=e)
     print(f"Faltan bibliotecas necesarias: {e}", file=sys.stderr)
     sys.exit(1)
+
+
+class LoggedTk(tk.Tk):
+    def report_callback_exception(self, exc_type, exc_value, exc_traceback):
+        write_log("Error en un callback de Tkinter.", level="ERROR", error=exc_value)
+        super().report_callback_exception(exc_type, exc_value, exc_traceback)
+
 
 # Windows DPI Awareness para mapeo exacto de píxeles en multi-monitor
 try:
@@ -26,8 +101,8 @@ try:
 except Exception:
     try:
         ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
+    except Exception as e:
+        write_log("No se pudo configurar la compatibilidad DPI de Windows.", level="WARNING", error=e)
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -35,8 +110,9 @@ advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
 shell32 = ctypes.WinDLL("shell32", use_last_error=True)
 try:
     powrprof = ctypes.WinDLL("powrprof", use_last_error=True)
-except Exception:
+except Exception as e:
     powrprof = None
+    write_log("La biblioteca de ajustes de energía no está disponible.", level="WARNING", error=e)
 
 LRESULT = ctypes.c_ssize_t
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
@@ -527,8 +603,6 @@ BLOCKED_SYSCOMMANDS = {
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 DETACHED_PROCESS = 0x00000008
 CREATE_NO_WINDOW = 0x08000000
-LOG_FOLDER_NAME = "WinLock"
-LOG_FILE_NAME = f"logs-{time.strftime('%d_%m_%Y-%H_%M_%S')}.txt"
 LATEST_VERSION_JSON = (
     "https://raw.githubusercontent.com/enderhacker/WinLock/refs/heads/main/version.json"
 )
@@ -753,9 +827,13 @@ def remove_tree(path, ignore_errors=False):
                     raise
     try:
         os.rmdir(path)
-    except Exception:
+    except FileNotFoundError:
         if not ignore_errors:
             raise
+    except Exception as e:
+        if not ignore_errors:
+            raise
+        write_log("No se pudo borrar por completo la carpeta temporal.", level="WARNING", error=e)
 
 
 def copy_file_bytes(src, dst):
@@ -918,38 +996,6 @@ def format_duration(total_seconds):
     )
 
 
-def get_app_data_dir():
-    """Obtiene la carpeta de datos de WinLock."""
-    try:
-        app_data_path = os.environ.get("APPDATA") or os.path.expanduser("~")
-        return os.path.join(app_data_path, LOG_FOLDER_NAME)
-    except Exception:
-        return os.path.abspath(".")
-
-
-LOG_DIRECTORY = get_app_data_dir()
-LOG_FILE_PATH = os.path.join(LOG_DIRECTORY, LOG_FILE_NAME)
-UPDATER_LOG_PATH = os.path.join(LOG_DIRECTORY, "updater.log")
-RESTORE_STATE_PATH = os.path.join(LOG_DIRECTORY, "restore_state.json")
-
-try:
-    os.makedirs(LOG_DIRECTORY, exist_ok=True)
-except OSError:
-    pass
-
-
-def write_log(message):
-    """Escribe un mensaje detallado con timestamp en el archivo de logs."""
-    try:
-        now = time.time()
-        ms = int((now % 1) * 1000)
-        timestamp = f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(now))},{ms:03d}"
-        with open(LOG_FILE_PATH, "a", encoding="utf-8") as log_file:
-            log_file.write(f"[{timestamp}] - {message}\n")
-    except Exception as e:
-        print(f"Error al escribir en el log: {e}", file=sys.stderr)
-
-
 def resource_path(relative_path):
     """Obtiene la ruta de los recursos en PyInstaller, Nuitka (--onefile/--standalone) o script."""
     candidates = []
@@ -1006,6 +1052,10 @@ def acquire_single_instance_mutex(retries=0, retry_delay=0.15):
     for attempt in range(retries + 1):
         handle = kernel32.CreateMutexW(None, False, "Local\\WinLock_SingleInstance_Mutex")
         if not handle:
+            write_log(
+                f"No se pudo crear el mutex de instancia única (Win32={ctypes.get_last_error()}).",
+                level="WARNING",
+            )
             return None, True
         if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
             kernel32.CloseHandle(handle)
@@ -1014,6 +1064,7 @@ def acquire_single_instance_mutex(retries=0, retry_delay=0.15):
                 continue
             return None, False
         _single_instance_mutex_handle = handle
+        write_log(f"Mutex de instancia única adquirido (intento {attempt + 1}).")
         return handle, True
     return None, False
 
@@ -1023,9 +1074,15 @@ def release_single_instance_mutex():
     global _single_instance_mutex_handle
     if _single_instance_mutex_handle:
         try:
-            kernel32.CloseHandle(_single_instance_mutex_handle)
-        except Exception:
-            pass
+            if kernel32.CloseHandle(_single_instance_mutex_handle):
+                write_log("Mutex de instancia única liberado.")
+            else:
+                write_log(
+                    f"No se pudo liberar el mutex (Win32={ctypes.get_last_error()}).",
+                    level="WARNING",
+                )
+        except Exception as e:
+            write_log("Error liberando el mutex de instancia única.", level="WARNING", error=e)
         _single_instance_mutex_handle = None
 
 
@@ -1060,7 +1117,8 @@ def relaunch_as_admin():
         return True
 
     write_log(
-        f"Auto-elevación cancelada o fallida (ShellExecuteW={res}). Continuando sin Administrador."
+        f"Auto-elevación cancelada o fallida (ShellExecuteW={res}). Continuando sin Administrador.",
+        level="WARNING",
     )
     acquire_single_instance_mutex(retries=3, retry_delay=0.1)
     return False
@@ -1074,12 +1132,13 @@ def prompt_admin_elevation():
     if is_admin():
         return False
 
-    modal_root = tk.Tk()
+    write_log("Mostrando el aviso de permisos de Administrador.")
+    modal_root = LoggedTk()
     modal_root.withdraw()
     try:
         modal_root.iconbitmap(resource_path("winlock.ico"))
-    except Exception:
-        pass
+    except Exception as e:
+        write_log("No se pudo cargar el icono del aviso de permisos.", level="WARNING", error=e)
     modal_root.attributes("-topmost", True)
 
     should_elevate = messagebox.askyesno(
@@ -1093,8 +1152,8 @@ def prompt_admin_elevation():
     )
     try:
         modal_root.destroy()
-    except Exception:
-        pass
+    except Exception as e:
+        write_log("Error cerrando el aviso de permisos.", level="WARNING", error=e)
 
     if not should_elevate:
         write_log("El usuario decidió continuar sin permisos de Administrador.")
@@ -1125,7 +1184,7 @@ def broadcast_policy_change():
     """Notifica a Windows que las políticas del sistema han cambiado."""
     try:
         res = ctypes.c_size_t(0)
-        user32.SendMessageTimeoutW(
+        if not user32.SendMessageTimeoutW(
             HWND_BROADCAST,
             WM_SETTINGCHANGE,
             0,
@@ -1133,9 +1192,22 @@ def broadcast_policy_change():
             SMTO_ABORTIFHUNG,
             300,
             ctypes.byref(res),
-        )
-    except Exception:
-        pass
+        ):
+            write_log(
+                f"No se confirmó la notificación de cambio de políticas (Win32={ctypes.get_last_error()}).",
+                level="WARNING",
+            )
+    except Exception as e:
+        write_log("Error notificando el cambio de políticas.", level="WARNING", error=e)
+
+
+def restore_thread_execution_state():
+    """Quita la solicitud de mantener Windows activo durante el bloqueo."""
+    try:
+        if not kernel32.SetThreadExecutionState(0x80000000):
+            write_log("Windows no pudo restablecer el estado de ejecución.", level="WARNING")
+    except Exception as e:
+        write_log("Error restableciendo el estado de ejecución.", level="WARNING", error=e)
 
 
 def start_explorer_if_not_running():
@@ -1147,8 +1219,10 @@ def start_explorer_if_not_running():
         if not explorer_running:
             write_log("explorer.exe no estaba ejecutándose. Iniciando explorer.exe.")
             subprocess.Popen("explorer.exe")
+        else:
+            write_log("explorer.exe ya está en ejecución.")
     except Exception as e:
-        write_log(f"Aviso verificando/iniciando explorer.exe: {e}")
+        write_log("Error verificando o iniciando explorer.exe.", level="WARNING", error=e)
 
 
 class SystemGuard:
@@ -1199,7 +1273,8 @@ class SystemGuard:
                     except FileNotFoundError:
                         pass
         except Exception as e:
-            write_log(f"Aviso gestionando RunOnce de recuperación: {e}")
+            action = "registrar" if enable else "retirar"
+            write_log(f"No se pudo {action} la recuperación automática.", level="WARNING", error=e)
 
     @classmethod
     def _snapshot_and_apply_power_buttons(cls):
@@ -1273,7 +1348,7 @@ class SystemGuard:
                 return backup
             return None
         except Exception as e:
-            write_log(f"Aviso modificando botones de energía: {e}")
+            write_log("Error ajustando los botones de energía.", level="WARNING", error=e)
             return None
         finally:
             try:
@@ -1283,16 +1358,21 @@ class SystemGuard:
 
     @classmethod
     def _restore_power_buttons(cls, power_backup):
-        if not power_backup or powrprof is None:
+        if not power_backup:
+            return
+        if powrprof is None:
+            write_log("No se pueden restaurar los botones de energía: falta powrprof.", level="WARNING")
             return
         try:
             scheme_guid = GUID.from_string(power_backup["scheme_guid"])
             subgroup = GUID.from_string(GUID_SYSTEM_BUTTON_SUBGROUP)
+            failed = 0
             for item in power_backup.get("settings", []):
                 try:
                     setting_guid = GUID.from_string(item["guid"])
+                    ac_result = dc_result = 0
                     if item.get("ac") is not None:
-                        powrprof.PowerWriteACValueIndex(
+                        ac_result = powrprof.PowerWriteACValueIndex(
                             None,
                             ctypes.byref(scheme_guid),
                             ctypes.byref(subgroup),
@@ -1300,19 +1380,34 @@ class SystemGuard:
                             int(item["ac"]),
                         )
                     if item.get("dc") is not None:
-                        powrprof.PowerWriteDCValueIndex(
+                        dc_result = powrprof.PowerWriteDCValueIndex(
                             None,
                             ctypes.byref(scheme_guid),
                             ctypes.byref(subgroup),
                             ctypes.byref(setting_guid),
                             int(item["dc"]),
                         )
+                    if ac_result or dc_result:
+                        failed += 1
+                        write_log(
+                            f"No se pudo restaurar todo el ajuste de energía {item['guid']} "
+                            f"(AC={ac_result}, DC={dc_result}).",
+                            level="WARNING",
+                        )
                 except Exception as e:
-                    write_log(f"Aviso restaurando ajuste de energía {item.get('guid')}: {e}")
-            powrprof.PowerSetActiveScheme(None, ctypes.byref(scheme_guid))
-            write_log("Botones de energía restaurados a su configuración original.")
+                    failed += 1
+                    write_log("Error restaurando un ajuste de energía.", level="WARNING", error=e)
+            scheme_result = powrprof.PowerSetActiveScheme(None, ctypes.byref(scheme_guid))
+            if failed or scheme_result:
+                write_log(
+                    f"Restauración de energía incompleta (ajustes con errores: {failed}, "
+                    f"PowerSetActiveScheme={scheme_result}).",
+                    level="WARNING",
+                )
+            else:
+                write_log("Botones de energía restaurados a su configuración original.")
         except Exception as e:
-            write_log(f"Error restaurando botones de energía: {e}")
+            write_log("Error restaurando botones de energía.", level="ERROR", error=e)
 
     @classmethod
     def _fallback_cleanup_policies(cls):
@@ -1348,10 +1443,11 @@ class SystemGuard:
             except PermissionError:
                 skipped_admin += 1
                 write_log(
-                    f"Sin permisos de Administrador para limpiar {hive_name}\\{subkey}\\{value_name} (continuando)."
+                    f"Sin permisos de Administrador para limpiar {hive_name}\\{subkey}\\{value_name}.",
+                    level="WARNING",
                 )
             except Exception as e:
-                write_log(f"Aviso en limpieza de respaldo ({value_name}): {e}")
+                write_log(f"Error en limpieza de respaldo ({value_name}).", level="WARNING", error=e)
         write_log(
             f"Limpieza fallback completada (políticas corregidas: {restored}, omitidas por falta de admin: {skipped_admin})."
         )
@@ -1394,7 +1490,11 @@ class SystemGuard:
                 except PermissionError:
                     continue
                 except Exception as e:
-                    write_log(f"Aviso leyendo política {hive_name}\\{subkey}\\{value_name}: {e}")
+                    write_log(
+                        f"Error leyendo la política {hive_name}\\{subkey}\\{value_name}.",
+                        level="WARNING",
+                        error=e,
+                    )
 
             power_backup = cls._snapshot_and_apply_power_buttons()
 
@@ -1408,8 +1508,9 @@ class SystemGuard:
                 with open(tmp_path, "w", encoding="utf-8") as f:
                     json.dump(state_payload, f, indent=2)
                 os.replace(tmp_path, RESTORE_STATE_PATH)
+                write_log(f"Estado de recuperación guardado ({len(reg_backups)} entradas de registro).")
             except Exception as e:
-                write_log(f"Error guardando estado de recuperación: {e}")
+                write_log("Error guardando estado de recuperación.", level="ERROR", error=e)
 
             cls._set_runonce_recovery(True)
 
@@ -1427,7 +1528,7 @@ class SystemGuard:
                 except PermissionError:
                     continue
                 except Exception as e:
-                    write_log(f"Error aplicando política {value_name}: {e}")
+                    write_log(f"Error aplicando la política {value_name}.", level="ERROR", error=e)
 
             cls._engaged = True
             broadcast_policy_change()
@@ -1448,15 +1549,21 @@ class SystemGuard:
                         state_payload = loaded
                     else:
                         state_corrupt = True
+                        write_log("Formato inesperado en el archivo de recuperación.", level="WARNING")
                 except Exception as e:
                     state_corrupt = True
-                    write_log(f"Archivo de recuperación ilegible o dañado: {e}")
+                    write_log("Archivo de recuperación ilegible o dañado.", level="ERROR", error=e)
 
             if state_payload:
+                write_log("Restaurando Windows desde el estado de recuperación guardado.")
+                restored = 0
                 skipped_admin = 0
+                failed = 0
                 for entry in state_payload.get("registry", []):
                     hive = cls.HIVES.get(entry.get("hive"))
                     if not hive:
+                        failed += 1
+                        write_log("Entrada de recuperación con un registro desconocido.", level="WARNING")
                         continue
                     try:
                         with winreg.CreateKeyEx(
@@ -1475,38 +1582,45 @@ class SystemGuard:
                                     winreg.DeleteValue(key, entry["name"])
                                 except FileNotFoundError:
                                     pass
+                        restored += 1
                     except PermissionError:
                         skipped_admin += 1
                         write_log(
-                            f"Sin permisos de Administrador para restaurar {entry.get('hive')}\\{entry.get('name')}; continuando."
+                            f"Sin permisos de Administrador para restaurar {entry.get('hive')}\\{entry.get('name')}.",
+                            level="WARNING",
                         )
                         continue
                     except Exception as e:
+                        failed += 1
                         write_log(
-                            f"Error restaurando política {entry.get('name')}: {e}"
+                            f"Error restaurando política {entry.get('name')}.", level="ERROR", error=e
                         )
 
                 cls._restore_power_buttons(state_payload.get("power"))
 
                 try:
                     os.remove(RESTORE_STATE_PATH)
-                except OSError:
+                except FileNotFoundError:
                     pass
+                except OSError as e:
+                    write_log("No se pudo borrar el archivo de recuperación.", level="WARNING", error=e)
 
                 cls._set_runonce_recovery(False)
                 broadcast_policy_change()
-                if skipped_admin:
-                    write_log(
-                        f"SystemGuard restaurado parcialmente ({skipped_admin} entradas HKLM requieren Administrador)."
-                    )
-                else:
-                    write_log("SystemGuard restaurado por completo.")
+                write_log(
+                    f"Restauración del registro: {restored} entradas restauradas, "
+                    f"{skipped_admin} sin permisos, {failed} con errores.",
+                    level="WARNING" if skipped_admin or failed else "INFO",
+                )
             elif force_fallback or state_corrupt:
+                write_log(f"Iniciando limpieza de respaldo (archivo dañado={state_corrupt}).")
                 if state_corrupt:
                     try:
                         os.remove(RESTORE_STATE_PATH)
-                    except OSError:
+                    except FileNotFoundError:
                         pass
+                    except OSError as e:
+                        write_log("No se pudo borrar el archivo de recuperación dañado.", level="WARNING", error=e)
                 cls._fallback_cleanup_policies()
                 cls._set_runonce_recovery(False)
                 broadcast_policy_change()
@@ -1542,12 +1656,14 @@ def hide_taskbars():
 
 def restore_taskbars():
     """Restaura y rehabilita la barra de tareas en todos los monitores."""
-    for hwnd in find_taskbar_windows():
+    taskbars = find_taskbar_windows()
+    write_log(f"Restaurando barras de tareas ({len(taskbars)} encontradas).")
+    for hwnd in taskbars:
         try:
             user32.EnableWindow(hwnd, True)
             user32.ShowWindow(hwnd, SW_SHOW)
-        except Exception:
-            pass
+        except Exception as e:
+            write_log("Error restaurando una barra de tareas.", level="WARNING", error=e)
 
 
 def get_monitors_info():
@@ -1734,7 +1850,8 @@ class InputBlocker:
         )
         if not self._kbd_hook_id:
             write_log(
-                f"No se pudo instalar WH_KEYBOARD_LL (error={ctypes.get_last_error()})."
+                f"No se pudo instalar WH_KEYBOARD_LL (error={ctypes.get_last_error()}).",
+                level="ERROR",
             )
 
         self._mouse_hook_id = user32.SetWindowsHookExW(
@@ -1742,7 +1859,8 @@ class InputBlocker:
         )
         if not self._mouse_hook_id:
             write_log(
-                f"No se pudo instalar WH_MOUSE_LL (error={ctypes.get_last_error()})."
+                f"No se pudo instalar WH_MOUSE_LL (error={ctypes.get_last_error()}).",
+                level="ERROR",
             )
 
         self._ready_event.set()
@@ -1827,8 +1945,8 @@ class WinLock:
 
         try:
             self.root.iconbitmap(resource_path("winlock.ico"))
-        except Exception:
-            pass
+        except Exception as e:
+            write_log("No se pudo cargar el icono principal.", level="WARNING", error=e)
 
         self.style = ttk.Style(self.root)
         self.style.theme_use("clam")
@@ -1978,12 +2096,14 @@ class WinLock:
         self.root.lift()
         self.root.focus_force()
         self.password_entry.focus_set()
+        write_log(f"Ventana de configuración lista (escala DPI={self.dpi_scale:.2f}).")
 
     def validate_and_confirm(self):
         """Valida la entrada y pide confirmación antes de bloquear."""
         pwd = self.password_entry.get()
 
         if len(pwd) < 1:
+            write_log("Configuración rechazada: falta la contraseña.", level="WARNING")
             messagebox.showwarning(
                 "Atención", "La contraseña no puede estar vacía.", parent=self.root
             )
@@ -1992,6 +2112,7 @@ class WinLock:
 
         msg = self.message_text.get("1.0", tk.END).strip()
         if len(msg) > 1000:
+            write_log("Configuración rechazada: el mensaje supera el límite.", level="WARNING")
             messagebox.showwarning(
                 "Atención",
                 "El mensaje no puede superar los 1000 caracteres.",
@@ -2004,6 +2125,7 @@ class WinLock:
             "¿Está seguro de que desea bloquear este ordenador?",
             parent=self.root,
         ):
+            write_log("El usuario canceló la confirmación del bloqueo.")
             return
 
         self.unlock_password = pwd
@@ -2109,7 +2231,7 @@ class WinLock:
                 if create_shutdown_reason:
                     write_log("Escudo anti-apagado (WM_QUERYENDSESSION) instalado.")
         except Exception as e:
-            write_log(f"Error instalando escudo de ventana: {e}")
+            write_log("Error instalando el escudo de ventana.", level="WARNING", error=e)
 
     def _remove_window_shield(self):
         """Restaura el WndProc original y elimina el bloqueo de apagado."""
@@ -2162,7 +2284,7 @@ class WinLock:
                 0x80000000 | 0x00000001 | 0x00000002 | 0x00000040
             )
         except Exception as e:
-            write_log(f"FALLO al cambiar estado de ejecución: {e}")
+            write_log("Error cambiando el estado de ejecución.", level="WARNING", error=e)
 
         self.create_lock_screen()
 
@@ -2239,7 +2361,7 @@ class WinLock:
             user32.ClipCursor(ctypes.byref(rect))
             user32.SetCursorPos(cx, cy)
         except Exception as e:
-            write_log(f"Error anclando cursor: {e}")
+            write_log(f"Error anclando el cursor: {e}", level="WARNING")
 
     @staticmethod
     def _hide_and_clip_cursor(primary_mon=None):
@@ -2253,18 +2375,24 @@ class WinLock:
                         break
             WinLock._clip_cursor(primary_mon)
         except Exception as e:
-            write_log(f"Error ocultando cursor: {e}")
+            write_log("Error ocultando el cursor.", level="WARNING", error=e)
 
     @staticmethod
     def _show_system_cursor():
         """Restaura el cursor y libera el movimiento en todas las pantallas."""
         try:
-            user32.ClipCursor(None)
+            if not user32.ClipCursor(None):
+                write_log(
+                    f"No se pudo liberar el movimiento del cursor (Win32={ctypes.get_last_error()}).",
+                    level="WARNING",
+                )
             for _ in range(32):
                 if user32.ShowCursor(True) >= 0:
                     break
+            else:
+                write_log("El cursor sigue oculto tras intentar mostrarlo.", level="WARNING")
         except Exception as e:
-            write_log(f"Error restaurando cursor: {e}")
+            write_log("Error restaurando el cursor.", level="ERROR", error=e)
 
     def _build_secondary_screens(self, secondary_mons):
         """Crea o reconstruye ventanas negras en todos los monitores secundarios."""
@@ -2396,6 +2524,7 @@ class WinLock:
         self._monitor_signature = tuple(
             (m["left"], m["top"], m["width"], m["height"]) for m in monitors
         )
+        write_log(f"Monitores detectados ({len(monitors)}): {self._monitor_signature}.")
 
         self._hide_and_clip_cursor(primary_mon)
         self._build_secondary_screens(secondary_mons)
@@ -2599,7 +2728,8 @@ class WinLock:
                 self.failed_attempts += 1
                 self.last_failed_time = time.strftime("%H:%M:%S")
                 write_log(
-                    f"Contraseña incorrecta introducida (intento #{self.failed_attempts})."
+                    f"Contraseña incorrecta introducida (intento #{self.failed_attempts}).",
+                    level="WARNING",
                 )
                 self._record_event(
                     f"Intento de contraseña incorrecta (#{self.failed_attempts}).",
@@ -2612,6 +2742,7 @@ class WinLock:
                 if self.failed_attempts % 3 == 0:
                     delay = 10
                     self.cooldown_until = time.time() + delay
+                    write_log(f"Espera de {delay}s aplicada tras {self.failed_attempts} intentos fallidos.")
                     if status_clear_job["id"]:
                         lock_win.after_cancel(status_clear_job["id"])
                         status_clear_job["id"] = None
@@ -2712,7 +2843,7 @@ class WinLock:
                     )
                     if sig != self._monitor_signature:
                         write_log(
-                            "Cambio de configuración de monitores detectado. Ajustando pantallas."
+                            f"Cambio de configuración de monitores: {self._monitor_signature} → {sig}."
                         )
                         self._record_event(
                             f"Cambio de monitores detectado ({len(mons)} pantalla(s) activa(s)).",
@@ -2776,6 +2907,7 @@ class WinLock:
         update_time_and_duration()
         process_key_queue()
         enforce_protection()
+        write_log("Ventanas de bloqueo inicializadas.")
 
     def show_unlock_summary_popup(self, total_seconds, start_time_str, end_time_str):
         """Muestra una ventana emergente personalizada en Tkinter con el resumen del bloqueo."""
@@ -2793,15 +2925,15 @@ class WinLock:
 
             try:
                 popup.iconbitmap(resource_path("winlock.ico"))
-            except Exception:
-                pass
+            except Exception as e:
+                write_log("No se pudo cargar el icono del resumen.", level="WARNING", error=e)
 
             def close_popup(event=None):
                 try:
                     if popup.winfo_exists():
                         popup.destroy()
-                except Exception:
-                    pass
+                except Exception as e:
+                    write_log("Error cerrando el resumen de sesión.", level="WARNING", error=e)
 
             popup.protocol("WM_DELETE_WINDOW", close_popup)
 
@@ -2968,8 +3100,8 @@ class WinLock:
             def open_logs_folder():
                 try:
                     os.startfile(LOG_DIRECTORY)
-                except Exception as ex:
-                    write_log(f"No se pudo abrir carpeta de logs: {ex}")
+                except Exception as e:
+                    write_log("No se pudo abrir la carpeta de logs.", level="WARNING", error=e)
 
             tk.Button(
                 footer,
@@ -3017,9 +3149,10 @@ class WinLock:
             popup.focus_force()
             close_btn.focus_set()
 
+            write_log(f"Mostrando resumen de sesión ({len(events_copy)} eventos, {alert_count} alertas).")
             self.root.wait_window(popup)
         except Exception as e:
-            write_log(f"Error mostrando popup de resumen: {e}")
+            write_log("Error mostrando el resumen de sesión.", level="ERROR", error=e)
 
     def _unlock_and_exit(self):
         """Desbloquea el sistema, restaura todas las políticas y muestra el resumen."""
@@ -3028,6 +3161,7 @@ class WinLock:
         total_seconds = time.time() - self.lock_start_time
         end_time_str = time.strftime("%H:%M:%S")
         start_time_str = self.lock_start_dt or end_time_str
+        write_log(f"Restaurando el escritorio tras {format_duration(total_seconds)} de bloqueo.")
 
         self._input_blocker.stop()
         self.stop_watchdog()
@@ -3036,23 +3170,20 @@ class WinLock:
         restore_taskbars()
         self._show_system_cursor()
 
-        try:
-            kernel32.SetThreadExecutionState(0x80000000)
-        except Exception:
-            pass
+        restore_thread_execution_state()
 
         if self.primary_lock_window:
             try:
                 self.primary_lock_window.destroy()
-            except Exception:
-                pass
+            except Exception as e:
+                write_log("Error cerrando la ventana principal de bloqueo.", level="WARNING", error=e)
             self.primary_lock_window = None
 
         for sw in self.secondary_screens:
             try:
                 sw.destroy()
-            except Exception:
-                pass
+            except Exception as e:
+                write_log("Error cerrando una ventana secundaria de bloqueo.", level="WARNING", error=e)
         self.secondary_screens = []
 
         self.show_unlock_summary_popup(total_seconds, start_time_str, end_time_str)
@@ -3079,29 +3210,27 @@ class WinLock:
             try:
                 if sw.winfo_exists():
                     sw.destroy()
-            except Exception:
-                pass
+            except Exception as e:
+                write_log("Error cerrando una ventana secundaria de bloqueo al salir.", level="WARNING", error=e)
         self.secondary_screens = []
 
         if self.primary_lock_window:
             try:
                 if self.primary_lock_window.winfo_exists():
                     self.primary_lock_window.destroy()
-            except Exception:
-                pass
+            except Exception as e:
+                write_log("Error cerrando la ventana principal de bloqueo al salir.", level="WARNING", error=e)
             self.primary_lock_window = None
 
         try:
             if hasattr(self, "root") and self.root.winfo_exists():
                 self.root.quit()
                 self.root.destroy()
-        except Exception:
-            pass
+        except Exception as e:
+            write_log("Error cerrando la ventana principal de la aplicación.", level="WARNING", error=e)
 
-        try:
-            kernel32.SetThreadExecutionState(0x80000000)
-        except Exception:
-            pass
+        restore_thread_execution_state()
+        write_log("Fin de la limpieza de la aplicación.")
 
 
 # ==============================================================================
@@ -3154,14 +3283,15 @@ def _collect_self_pids(target_exe):
                 parent_exe = get_process_exe_path(ppid)
                 if parent_exe and os.path.normcase(os.path.abspath(parent_exe)) == norm_target:
                     pids.append(ppid)
-    except Exception:
-        pass
+    except Exception as e:
+        write_log("Error identificando los procesos de WinLock para la actualización.", level="WARNING", error=e)
     return pids
 
 
 def cleanup_update_staging_dir(dir_path, delay_seconds=1.5):
     """Elimina de forma segura la carpeta temporal de actualización en %TEMP%."""
     if not dir_path:
+        write_log("No se indicó una carpeta temporal de actualización.", level="WARNING")
         return
     try:
         temp_root = os.path.normcase(get_temp_dir())
@@ -3169,27 +3299,34 @@ def cleanup_update_staging_dir(dir_path, delay_seconds=1.5):
         norm_target = os.path.normcase(target)
         base = os.path.basename(target)
         if not norm_target.startswith(temp_root + os.sep):
+            write_log("Omitida limpieza de actualización: la carpeta está fuera de TEMP.", level="WARNING")
             return
         if not base.startswith(UPDATE_STAGING_PREFIX):
+            write_log("Omitida limpieza de actualización: nombre de carpeta inesperado.", level="WARNING")
             return
-    except Exception:
+    except Exception as e:
+        write_log("No se pudo comprobar la ruta de limpieza de actualización.", level="WARNING", error=e)
         return
 
     def _worker():
+        write_log(f"Limpieza de actualización programada (espera: {delay_seconds}s).")
         if delay_seconds > 0:
             time.sleep(delay_seconds)
-        for _ in range(5):
+        for attempt in range(1, 6):
             if not os.path.exists(target):
+                write_log("La carpeta temporal de actualización ya no existe.")
                 return
             try:
                 remove_tree(target, ignore_errors=False)
-                write_log(f"Carpeta temporal de actualización limpiada: {target}")
+                write_log(f"Carpeta temporal de actualización limpiada (intento {attempt}): {target}")
                 return
-            except Exception:
+            except Exception as e:
+                if attempt == 5:
+                    write_log("Agotados los reintentos de limpieza temporal.", level="WARNING", error=e)
                 time.sleep(0.5)
         remove_tree(target, ignore_errors=True)
 
-    threading.Thread(target=_worker, daemon=True).start()
+    threading.Thread(target=_worker, name="UpdateCleanup", daemon=True).start()
 
 
 def validate_pe_executable(
@@ -3297,6 +3434,7 @@ def download_file_resilient(
         if resume_from > 0:
             headers["Range"] = f"bytes={resume_from}-"
 
+        write_log(f"Descarga: intento {attempt}/{max_retries} (bytes previos: {resume_from}).")
         if progress_cb:
             msg = (
                 "Conectando con el servidor..."
@@ -3328,6 +3466,10 @@ def download_file_resilient(
                     file_mode = "wb"
                     downloaded = 0
 
+                write_log(
+                    f"Respuesta de descarga HTTP {status} (bytes totales: {expected_total}, "
+                    f"desplazamiento inicial: {downloaded})."
+                )
                 display_total = expected_total or declared_size_bytes or 0
                 start_mono = time.monotonic()
                 session_bytes = 0
@@ -3375,6 +3517,9 @@ def download_file_resilient(
                         100,
                         f"{downloaded / 1048576:.2f} MB / {total_for_msg / 1048576:.2f} MB (100%)",
                     )
+                write_log(
+                    f"Descarga completada ({downloaded} bytes, {time.monotonic() - start_mono:.1f}s en este intento)."
+                )
                 return downloaded, expected_total
 
         except InterruptedError:
@@ -3383,10 +3528,15 @@ def download_file_resilient(
             if getattr(err, "code", None) == 416 and os.path.exists(dest_path):
                 try:
                     os.remove(dest_path)
-                except OSError:
-                    pass
+                    write_log("Descarga parcial descartada tras recibir HTTP 416.")
+                except OSError as e:
+                    write_log("No se pudo borrar la descarga parcial tras HTTP 416.", level="WARNING", error=e)
             last_error = err
-            write_log(f"Error de descarga en intento {attempt}/{max_retries}: {err}")
+            write_log(
+                f"Error de descarga en intento {attempt}/{max_retries}.",
+                level="WARNING" if attempt < max_retries else "ERROR",
+                error=err,
+            )
 
         if attempt < max_retries:
             backoff = 1.0 * attempt
@@ -3747,6 +3897,7 @@ exit 0
     with open(ps_path, "w", encoding="utf-8-sig") as f:
         f.write(ps_script)
 
+    write_log(f"Archivos del instalador preparados para la versión {target_version!r}.")
     release_single_instance_mutex()
 
     ps_exe = os.path.join(
@@ -3780,10 +3931,15 @@ exit 0
                 env=_build_clean_subprocess_env(),
                 close_fds=True,
             )
-            write_log(f"Actualizador PowerShell iniciado (PIDs monitorizados: {wait_pids}).")
+            write_log(
+                f"Actualizador PowerShell iniciado (PIDs monitorizados: {wait_pids}). "
+                f"Detalles de instalación: {UPDATER_LOG_PATH}"
+            )
             return
         except Exception as ps_err:
-            write_log(f"No se pudo iniciar PowerShell ({ps_err}); usando fallback cmd.exe.")
+            write_log("No se pudo iniciar PowerShell; usando cmd.exe.", level="WARNING", error=ps_err)
+    else:
+        write_log("No se encontró PowerShell; usando cmd.exe.", level="WARNING")
 
     _launch_cmd_updater_fallback(target_exe, new_exe, backup_exe, staging_dir, wait_pids)
     write_log(f"Actualizador cmd.exe fallback iniciado (PIDs monitorizados: {wait_pids}).")
@@ -3795,14 +3951,15 @@ def show_startup_and_check_updates():
     Al pulsar 'Actualizar', descarga, verifica e instala in-place.
     Devuelve True si se inició una actualización y el programa debe salir.
     """
-    splash = tk.Tk()
+    write_log("Mostrando la ventana de inicio y comprobando actualizaciones.")
+    splash = LoggedTk()
     splash.title("WinLock")
     splash.resizable(False, False)
 
     try:
         splash.iconbitmap(resource_path("winlock.ico"))
-    except Exception:
-        pass
+    except Exception as e:
+        write_log("No se pudo cargar el icono de inicio.", level="WARNING", error=e)
 
     dpi_scale = get_dpi_scale(splash)
 
@@ -3858,19 +4015,30 @@ def show_startup_and_check_updates():
             state["staging_dir"] = None
             remove_tree(sdir, ignore_errors=True)
 
+    def clear_container():
+        for widget in container.winfo_children():
+            if isinstance(widget, ttk.Progressbar):
+                widget.stop()
+            widget.destroy()
+
     def close_splash():
+        write_log(f"Cerrando la ventana de inicio (instalador iniciado={state['updating']}).")
         state["closed"] = True
         state["cancel_event"].set()
         cleanup_current_staging()
         try:
             if splash.winfo_exists():
-                splash.destroy()
-        except Exception:
-            pass
+                try:
+                    clear_container()
+                finally:
+                    splash.destroy()
+        except Exception as e:
+            write_log("Error cerrando la ventana de inicio.", level="WARNING", error=e)
 
     splash.protocol("WM_DELETE_WINDOW", close_splash)
 
     def check_network():
+        started = time.monotonic()
         try:
             req = urllib.request.Request(
                 LATEST_VERSION_JSON,
@@ -3882,17 +4050,17 @@ def show_startup_and_check_updates():
             )
             with urllib.request.urlopen(req, timeout=5) as response:
                 state["result"] = json.loads(response.read().decode("utf-8"))
+            if isinstance(state["result"], dict):
+                write_log(f"Metadatos de actualización recibidos en {time.monotonic() - started:.1f}s.")
+            else:
+                write_log("Formato inesperado en los metadatos de actualización.", level="WARNING")
         except Exception as err:
-            write_log(f"Error comprobando actualizaciones: {err}")
+            write_log("Error consultando los metadatos de actualización.", level="WARNING", error=err)
             state["result"] = None
         finally:
             state["done"] = True
 
-    threading.Thread(target=check_network, daemon=True).start()
-
-    def clear_container():
-        for w in container.winfo_children():
-            w.destroy()
+    threading.Thread(target=check_network, name="UpdateCheck", daemon=True).start()
 
     def show_error_view(latest_info, error_text):
         if state["closed"] or not splash.winfo_exists():
@@ -3922,8 +4090,9 @@ def show_startup_and_check_updates():
         def open_manual_site():
             try:
                 os.startfile(UPDATE_URL)
-            except Exception:
-                pass
+                write_log("Abierta la web de actualización manual.")
+            except Exception as e:
+                write_log("No se pudo abrir la web de actualización manual.", level="WARNING", error=e)
             close_splash()
 
         ttk.Button(
@@ -3956,6 +4125,10 @@ def show_startup_and_check_updates():
         dl_url = str(latest_info.get("download_url") or "").strip()
         declared_size_bytes = parse_human_size(latest_info.get("size"))
         expected_sha256 = latest_info.get("sha256")
+        write_log(
+            f"Actualización solicitada a {remote_tag!r} (modo compilado={compiled}, "
+            f"tamaño anunciado={declared_size_bytes} bytes)."
+        )
 
         if compiled:
             target_exe = get_executable_path()
@@ -3968,13 +4141,22 @@ def show_startup_and_check_updates():
             needed_bytes = max(30 * 1024 * 1024, int(declared_size_bytes * 2.5))
             free_bytes = get_free_disk_bytes(temp_root)
             if free_bytes is not None and free_bytes < needed_bytes:
+                write_log(
+                    f"Espacio temporal insuficiente (libre: {free_bytes}, requerido: {needed_bytes} bytes).",
+                    level="WARNING",
+                )
                 show_error_view(
                     latest_info,
                     "No hay suficiente espacio libre en la unidad temporal para descargar la actualización.",
                 )
                 return
-        except Exception:
-            pass
+            if free_bytes is None:
+                write_log(
+                    f"No se pudo consultar el espacio temporal (Win32={ctypes.get_last_error()}).",
+                    level="WARNING",
+                )
+        except Exception as e:
+            write_log("Error comprobando el espacio libre para actualizar.", level="WARNING", error=e)
 
         state["cancel_event"] = threading.Event()
         cancel_ev = state["cancel_event"]
@@ -4037,6 +4219,7 @@ def show_startup_and_check_updates():
 
         def finalize_install(new_exe, staging_dir):
             if state["closed"] or cancel_ev.is_set():
+                write_log("Instalación cancelada antes de aplicar la actualización.")
                 cleanup_current_staging()
                 return
             try:
@@ -4055,6 +4238,7 @@ def show_startup_and_check_updates():
                     close_splash()
                 else:
                     copy_file_bytes(new_exe, target_exe)
+                    write_log(f"Ejecutable actualizado guardado en: {target_exe}")
                     cleanup_current_staging()
                     messagebox.showinfo(
                         "Actualización descargada - WinLock",
@@ -4065,7 +4249,7 @@ def show_startup_and_check_updates():
                     close_splash()
             except Exception as inst_err:
                 state["updating"] = False
-                write_log(f"Error lanzando instalador in-place: {inst_err}")
+                write_log("Error aplicando la actualización descargada.", level="ERROR", error=inst_err)
                 show_error_view(
                     latest_info,
                     f"La descarga se completó, pero no se pudo aplicar la actualización:\n{inst_err}",
@@ -4079,6 +4263,7 @@ def show_startup_and_check_updates():
             state["staging_dir"] = staging_dir
             try:
                 os.makedirs(staging_dir, exist_ok=True)
+                write_log(f"Carpeta temporal de actualización preparada: {staging_dir}")
                 staged_exe = os.path.join(staging_dir, "WinLock_new.exe")
 
                 def on_progress(pct, text):
@@ -4095,18 +4280,22 @@ def show_startup_and_check_updates():
                 )
 
                 if cancel_ev.is_set() or state["closed"]:
+                    write_log("Actualización cancelada después de la descarga.")
                     remove_tree(staging_dir, ignore_errors=True)
                     return
 
+                write_log(f"Verificando el ejecutable descargado (SHA-256 disponible={bool(expected_sha256)}).")
                 splash.after(0, update_ui, 100, "Verificando integridad del ejecutable...")
-                validate_pe_executable(
+                verified_size = validate_pe_executable(
                     file_path=staged_exe,
                     expected_content_length=server_len,
                     declared_size_bytes=declared_size_bytes,
                     expected_sha256=expected_sha256,
                 )
+                write_log(f"Verificación del ejecutable completada ({verified_size} bytes).")
 
                 if cancel_ev.is_set() or state["closed"]:
+                    write_log("Actualización cancelada después de la verificación.")
                     remove_tree(staging_dir, ignore_errors=True)
                     return
 
@@ -4116,7 +4305,7 @@ def show_startup_and_check_updates():
                 write_log("Autoactualización cancelada por el usuario.")
                 remove_tree(staging_dir, ignore_errors=True)
             except Exception as ex:
-                write_log(f"Error durante la autoactualización: {ex}")
+                write_log("Error preparando la actualización.", level="ERROR", error=ex)
                 if not state["closed"] and not cancel_ev.is_set():
                     splash.after(
                         0,
@@ -4127,10 +4316,9 @@ def show_startup_and_check_updates():
                 else:
                     remove_tree(staging_dir, ignore_errors=True)
 
-        threading.Thread(target=download_worker, daemon=True).start()
+        threading.Thread(target=download_worker, name="UpdateDownload", daemon=True).start()
 
     def prompt_update(latest_info):
-        progress.stop()
         clear_container()
 
         remote_tag = str(latest_info.get("tag_name") or "").strip()
@@ -4178,21 +4366,23 @@ def show_startup_and_check_updates():
     def monitor_progress():
         if state["closed"] or not splash.winfo_exists():
             return
-        if state["done"]:
-            info = state["result"]
-            remote_tag = info.get("tag_name") if isinstance(info, dict) else None
-            dl_url = info.get("download_url") if isinstance(info, dict) else None
-            if (
-                remote_tag
-                and dl_url
-                and str(dl_url).strip().lower().startswith("https://")
-                and parse_version(remote_tag) > parse_version(LOCAL_VERSION)
-            ):
-                prompt_update(info)
-            else:
-                close_splash()
-        else:
+        if not state["done"]:
             splash.after(100, monitor_progress)
+            return
+
+        info = state["result"]
+        if isinstance(info, dict):
+            remote_tag = info.get("tag_name")
+            dl_url = info.get("download_url")
+            if not remote_tag or not dl_url or not str(dl_url).strip().lower().startswith("https://"):
+                write_log("Metadatos sin versión o enlace HTTPS de descarga válido.", level="WARNING")
+            elif parse_version(remote_tag) > parse_version(LOCAL_VERSION):
+                write_log(f"Actualización disponible: {remote_tag!r}.")
+                prompt_update(info)
+                return
+            else:
+                write_log(f"No hay una versión más reciente (versión remota: {remote_tag!r}).")
+        close_splash()
 
     splash.after(100, monitor_progress)
     splash.mainloop()
@@ -4201,21 +4391,22 @@ def show_startup_and_check_updates():
 
 def full_emergency_restore(explicit_restore=False):
     """Restaura políticas, botones de energía, barras de tareas, explorer, hooks y cursor."""
+    write_log(f"Iniciando recuperación del sistema (modo explícito={explicit_restore}).")
     if _active_input_blocker is not None:
         try:
             _active_input_blocker.stop()
-        except Exception:
-            pass
+        except Exception as e:
+            write_log("Error deteniendo el bloqueo de entrada durante la recuperación.", level="ERROR", error=e)
 
     try:
         SystemGuard.restore(force_fallback=explicit_restore)
     except Exception as e:
-        write_log(f"Aviso en SystemGuard.restore: {e}")
+        write_log("Error restaurando la configuración de Windows.", level="ERROR", error=e)
 
     try:
         restore_taskbars()
     except Exception as e:
-        write_log(f"Aviso restaurando barras de tareas: {e}")
+        write_log("Error restaurando las barras de tareas.", level="ERROR", error=e)
 
     if explicit_restore:
         start_explorer_if_not_running()
@@ -4223,12 +4414,10 @@ def full_emergency_restore(explicit_restore=False):
     try:
         WinLock._show_system_cursor()
     except Exception as e:
-        write_log(f"Aviso restaurando cursor: {e}")
+        write_log("Error restaurando el cursor durante la recuperación.", level="ERROR", error=e)
 
-    try:
-        kernel32.SetThreadExecutionState(0x80000000)
-    except Exception:
-        pass
+    restore_thread_execution_state()
+    write_log("Fin de la recuperación del sistema.")
 
 
 if __name__ == "__main__":
@@ -4247,16 +4436,16 @@ if __name__ == "__main__":
         retry_delay=0.15,
     )
     if not is_first_instance:
-        _r = tk.Tk()
+        write_log("Inicio cancelado: ya hay otra instancia de WinLock.", level="WARNING")
+        _r = LoggedTk()
         _r.withdraw()
         messagebox.showinfo("WinLock", "WinLock ya se está ejecutando.")
         _r.destroy()
         sys.exit(0)
 
     write_log(
-        f"\n{'='*50}\nIniciando sesión de WinLock {LOCAL_VERSION}"
-        + (" (recién actualizado)" if just_updated else "")
-        + (" [Administrador]" if is_admin() else " [Usuario estándar]")
+        f"Modo de inicio: administrador={is_admin()}, compilado={is_compiled_executable()}, "
+        f"recién actualizado={just_updated}, relanzado con elevación={just_elevated}."
     )
 
     # Antes de restaurar estado previo o comprobar actualizaciones: ofrecer auto-elevación (Sí/No)
@@ -4267,6 +4456,8 @@ if __name__ == "__main__":
     if os.path.exists(RESTORE_STATE_PATH):
         write_log("Detectado estado pendiente de sesión anterior. Restaurando sistema.")
         full_emergency_restore(explicit_restore=True)
+    else:
+        write_log("No se encontró un estado pendiente de recuperación.")
 
     # Limpieza silenciosa de la carpeta temporal tras completar una autoactualización
     if "--cleanup-update" in sys.argv:
@@ -4274,27 +4465,35 @@ if __name__ == "__main__":
             idx = sys.argv.index("--cleanup-update")
             if idx + 1 < len(sys.argv):
                 cleanup_update_staging_dir(sys.argv[idx + 1], delay_seconds=1.5)
-        except Exception:
-            pass
+            else:
+                write_log("La opción --cleanup-update necesita una carpeta.", level="WARNING")
+        except Exception as e:
+            write_log("Error preparando la limpieza de actualización.", level="WARNING", error=e)
 
     # Si acaba de actualizarse, evitar comprobación redundante y posibles bucles de versión
-    if not just_updated and show_startup_and_check_updates():
+    if just_updated:
+        write_log("Comprobación de actualizaciones omitida tras el reinicio de la aplicación.")
+    elif show_startup_and_check_updates():
+        write_log("Cerrando WinLock para que el instalador aplique la actualización.")
         release_single_instance_mutex()
         sys.exit(0)
 
     app_instance = None
     try:
-        root = tk.Tk()
+        root = LoggedTk()
         app_instance = WinLock(root)
+        write_log("Iniciando el bucle principal de Tkinter.")
         root.mainloop()
-    except (KeyboardInterrupt, SystemExit):
-        pass
+        write_log("Bucle principal de Tkinter finalizado.")
+    except (KeyboardInterrupt, SystemExit) as e:
+        write_log(f"Cierre del hilo principal solicitado ({type(e).__name__}).")
     except Exception as e:
-        write_log(f"Error general en hilo principal: {e}")
+        write_log("Error general en el hilo principal.", level="ERROR", error=e)
     finally:
         if app_instance:
             app_instance._quit_app()
         else:
             full_emergency_restore()
         release_single_instance_mutex()
+        write_log("Proceso principal de WinLock finalizado.")
         sys.exit(0)
