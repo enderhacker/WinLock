@@ -3,3 +3,5 @@
 *.exe
 *.spec
 .log
+/main.dist
+/main.build

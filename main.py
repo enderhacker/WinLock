@@ -1,4 +1,4 @@
-LOCAL_VERSION = "v0.9"
+LOCAL_VERSION = "v1.0"
 
 import sys
 
@@ -8,6 +8,7 @@ try:
     import hashlib
     import json
     import os
+    import ssl
     import subprocess
     import threading
     import time
@@ -114,6 +115,15 @@ class KBDLLHOOKSTRUCT(ctypes.Structure):
     ]
 
 
+class CURSORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.wintypes.DWORD),
+        ("flags", ctypes.wintypes.DWORD),
+        ("hCursor", ctypes.wintypes.HANDLE),
+        ("ptScreenPos", ctypes.wintypes.POINT),
+    ]
+
+
 # Firmas explícitas de Win32 API (seguras en 32-bit y 64-bit)
 _set_window_long_ptr = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
 _set_window_long_ptr.argtypes = [ctypes.wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
@@ -133,6 +143,9 @@ user32.GetKeyboardLayout.restype = ctypes.wintypes.HKL
 
 user32.GetKeyState.argtypes = [ctypes.c_int]
 user32.GetKeyState.restype = ctypes.c_short
+
+user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+user32.GetAsyncKeyState.restype = ctypes.c_short
 
 user32.ToUnicodeEx.argtypes = [
     ctypes.c_uint,
@@ -171,6 +184,9 @@ user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
 user32.GetParent.argtypes = [ctypes.wintypes.HWND]
 user32.GetParent.restype = ctypes.wintypes.HWND
 
+user32.GetAncestor.argtypes = [ctypes.wintypes.HWND, ctypes.c_uint]
+user32.GetAncestor.restype = ctypes.wintypes.HWND
+
 user32.EnumWindows.argtypes = [WNDENUMPROC, ctypes.wintypes.LPARAM]
 user32.EnumWindows.restype = ctypes.wintypes.BOOL
 
@@ -203,6 +219,9 @@ user32.IsWindowVisible.restype = ctypes.wintypes.BOOL
 
 user32.ShowCursor.argtypes = [ctypes.wintypes.BOOL]
 user32.ShowCursor.restype = ctypes.c_int
+
+user32.GetCursorInfo.argtypes = [ctypes.POINTER(CURSORINFO)]
+user32.GetCursorInfo.restype = ctypes.wintypes.BOOL
 
 user32.ClipCursor.argtypes = [ctypes.POINTER(ctypes.wintypes.RECT)]
 user32.ClipCursor.restype = ctypes.wintypes.BOOL
@@ -282,6 +301,13 @@ user32.PostThreadMessageW.restype = ctypes.wintypes.BOOL
 
 kernel32.GetCurrentThreadId.argtypes = []
 kernel32.GetCurrentThreadId.restype = ctypes.wintypes.DWORD
+
+kernel32.GetModuleFileNameW.argtypes = [
+    ctypes.wintypes.HMODULE,
+    ctypes.wintypes.LPWSTR,
+    ctypes.wintypes.DWORD,
+]
+kernel32.GetModuleFileNameW.restype = ctypes.wintypes.DWORD
 
 kernel32.CreateMutexW.argtypes = [
     ctypes.c_void_p,
@@ -375,7 +401,7 @@ shell32.ShellExecuteW.argtypes = [
     ctypes.wintypes.LPCWSTR,
     ctypes.c_int,
 ]
-shell32.ShellExecuteW.restype = ctypes.c_ssize_t
+shell32.ShellExecuteW.restype = ctypes.c_size_t
 
 if powrprof is not None:
     powrprof.PowerGetActiveScheme.argtypes = [
@@ -434,6 +460,7 @@ SWP_SHOWWINDOW = 0x0040
 SW_HIDE = 0
 SW_SHOWNORMAL = 1
 SW_SHOW = 5
+GA_ROOT = 2
 GWLP_WNDPROC = -4
 WM_CLOSE = 0x0010
 WM_QUERYENDSESSION = 0x0011
@@ -446,6 +473,7 @@ WM_SYSKEYUP = 0x0105
 WM_SYSCOMMAND = 0x0112
 SMTO_ABORTIFHUNG = 0x0002
 ERROR_ALREADY_EXISTS = 183
+CURSOR_SHOWING = 0x00000001
 
 TH32CS_SNAPPROCESS = 0x00000002
 PROCESS_TERMINATE = 0x0001
@@ -601,6 +629,61 @@ MENU_OVERLAY_PROCESSES = {
 
 
 # ==============================================================================
+# DETECCIÓN DE ENTORNO COMPILADO (NUITKA / PYINSTALLER / PYTHON PURO)
+# ==============================================================================
+
+def is_compiled_executable():
+    """Detecta si se ejecuta como binario compilado (Nuitka --onefile/--standalone o PyInstaller)."""
+    return bool(
+        getattr(sys, "frozen", False)
+        or ("__compiled__" in globals())
+        or ("NUITKA_ONEFILE_PARENT" in os.environ)
+    )
+
+
+def get_process_exe_path(pid):
+    """Devuelve la ruta completa del ejecutable de un PID (o None si no accesible)."""
+    h_proc = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not h_proc:
+        return None
+    try:
+        buf = ctypes.create_unicode_buffer(1024)
+        size = ctypes.wintypes.DWORD(1024)
+        if kernel32.QueryFullProcessImageNameW(h_proc, 0, buf, ctypes.byref(size)):
+            return buf.value
+    finally:
+        kernel32.CloseHandle(h_proc)
+    return None
+
+
+def get_executable_path():
+    """
+    Devuelve la ruta real del ejecutable WinLock.exe (en Nuitka --onefile apunta al
+    .exe exterior y NO al binario desempaquetado en %TEMP%). En modo script devuelve __file__.
+    """
+    if not is_compiled_executable():
+        return os.path.abspath(__file__)
+
+    parent_pid_str = os.environ.get("NUITKA_ONEFILE_PARENT", "").strip()
+    if parent_pid_str.isdigit():
+        parent_exe = get_process_exe_path(int(parent_pid_str))
+        if parent_exe and os.path.isfile(parent_exe):
+            return os.path.abspath(parent_exe)
+
+    if sys.argv and sys.argv[0]:
+        argv0_abs = os.path.abspath(sys.argv[0])
+        if argv0_abs.lower().endswith(".exe") and os.path.isfile(argv0_abs):
+            return argv0_abs
+
+    buf = ctypes.create_unicode_buffer(1024)
+    n = kernel32.GetModuleFileNameW(None, buf, 1024)
+    if 0 < n < 1024 and os.path.isfile(buf.value):
+        return os.path.abspath(buf.value)
+
+    return os.path.abspath(sys.executable)
+
+
+# ==============================================================================
 # UTILIDADES NATIVAS DE WINDOWS (SIN DEPENDENCIAS EXTERNAS)
 # ==============================================================================
 
@@ -741,21 +824,6 @@ def get_process_creation_time(pid):
     return None
 
 
-def get_process_exe_path(pid):
-    """Devuelve la ruta completa del ejecutable de un PID (o None si no accesible)."""
-    h_proc = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-    if not h_proc:
-        return None
-    try:
-        buf = ctypes.create_unicode_buffer(1024)
-        size = ctypes.wintypes.DWORD(1024)
-        if kernel32.QueryFullProcessImageNameW(h_proc, 0, buf, ctypes.byref(size)):
-            return buf.value
-    finally:
-        kernel32.CloseHandle(h_proc)
-    return None
-
-
 def terminate_process(pid):
     """Termina un proceso por PID usando OpenProcess + TerminateProcess."""
     h_proc = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
@@ -883,9 +951,53 @@ def write_log(message):
 
 
 def resource_path(relative_path):
-    """Obtiene la ruta de los recursos junto al código o en el paquete."""
-    base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base_path, relative_path)
+    """Obtiene la ruta de los recursos en PyInstaller, Nuitka (--onefile/--standalone) o script."""
+    candidates = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(meipass)
+    try:
+        candidates.append(os.path.dirname(os.path.abspath(__file__)))
+    except Exception:
+        pass
+    try:
+        candidates.append(os.path.dirname(get_executable_path()))
+    except Exception:
+        pass
+    candidates.append(os.path.abspath("."))
+
+    for base_path in candidates:
+        full_path = os.path.join(base_path, relative_path)
+        if os.path.exists(full_path):
+            return full_path
+    return os.path.join(candidates[0], relative_path)
+
+
+def get_dpi_scale(win):
+    """Obtiene el factor de escala DPI de la ventana Tkinter (1.0 = 96 DPI)."""
+    try:
+        scale = float(win.winfo_fpixels("1i")) / 96.0
+        return max(1.0, scale)
+    except Exception:
+        return 1.0
+
+
+def _get_toplevel_hwnd(win):
+    """Obtiene el HWND real de nivel superior sin confundir padre con propietario."""
+    try:
+        frame = win.wm_frame()
+        if frame and frame != "0x0":
+            hwnd = int(frame, 16)
+            if hwnd:
+                return hwnd
+    except Exception:
+        pass
+    try:
+        hwnd = win.winfo_id()
+        root_hwnd = user32.GetAncestor(hwnd, GA_ROOT)
+        return root_hwnd or hwnd
+    except Exception:
+        return 0
 
 
 def acquire_single_instance_mutex(retries=0, retry_delay=0.15):
@@ -919,15 +1031,16 @@ def release_single_instance_mutex():
 
 def relaunch_as_admin():
     """Relanza WinLock con elevación UAC mediante ShellExecuteW ('runas')."""
-    is_frozen = bool(getattr(sys, "frozen", False))
-    exe_path = os.path.abspath(sys.executable)
+    compiled = is_compiled_executable()
     forwarded_args = [a for a in sys.argv[1:] if a != "--elevated"]
     forwarded_args.append("--elevated")
 
-    if is_frozen:
+    if compiled:
+        exe_path = get_executable_path()
         params = subprocess.list2cmdline(forwarded_args)
         workdir = os.path.dirname(exe_path) or os.getcwd()
     else:
+        exe_path = os.path.abspath(sys.executable)
         script_path = os.path.abspath(__file__)
         params = subprocess.list2cmdline([script_path] + forwarded_args)
         workdir = os.path.dirname(script_path) or os.getcwd()
@@ -942,7 +1055,7 @@ def relaunch_as_admin():
         workdir,
         SW_SHOWNORMAL,
     )
-    if res > 32:
+    if int(res or 0) > 32:
         write_log("Instancia elevada lanzada correctamente. Cerrando instancia actual.")
         return True
 
@@ -1062,8 +1175,8 @@ class SystemGuard:
 
     @classmethod
     def _build_recovery_command(cls):
-        if getattr(sys, "frozen", False):
-            return f'"{os.path.abspath(sys.executable)}" --restore'
+        if is_compiled_executable():
+            return f'"{get_executable_path()}" --restore'
         return f'"{os.path.abspath(sys.executable)}" "{os.path.abspath(__file__)}" --restore'
 
     @classmethod
@@ -1164,7 +1277,7 @@ class SystemGuard:
             return None
         finally:
             try:
-                kernel32.LocalFree(scheme_ptr)
+                kernel32.LocalFree(ctypes.cast(scheme_ptr, ctypes.c_void_p))
             except Exception:
                 pass
 
@@ -1509,16 +1622,39 @@ def force_window_topmost(win):
             return
         win.attributes("-topmost", True)
         win.lift()
-        hwnd = user32.GetParent(win.winfo_id()) or win.winfo_id()
-        user32.SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+        hwnd = _get_toplevel_hwnd(win)
+        if hwnd:
+            user32.SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+            )
+    except Exception:
+        pass
+
+
+def place_window_on_monitor(win, mon):
+    """Coloca una ventana exactamente sobre las coordenadas físicas de un monitor."""
+    try:
+        win.geometry(
+            f"{mon['width']}x{mon['height']}+{mon['left']}+{mon['top']}"
         )
+        win.update_idletasks()
+        hwnd = _get_toplevel_hwnd(win)
+        if hwnd:
+            user32.SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                mon["left"],
+                mon["top"],
+                mon["width"],
+                mon["height"],
+                SWP_SHOWWINDOW,
+            )
     except Exception:
         pass
 
@@ -1674,10 +1810,8 @@ class WinLock:
         self._caps_lock_on = bool(user32.GetKeyState(VK_CAPITAL) & 1)
         self._caps_key_held = False
 
-        # Subclasificación de ventana anti-apagado y anti-cierre
-        self._shielded_hwnd = None
-        self._orig_wndproc = None
-        self._wndproc_ref = None
+        # Subclasificación de ventanas anti-apagado y anti-cierre
+        self._shielded_windows = []
 
         self.setup_frame = None
         self.setup_caps_label = None
@@ -1685,8 +1819,9 @@ class WinLock:
         self.primary_lock_window = None
         self._monitor_signature = None
 
+        self.dpi_scale = get_dpi_scale(self.root)
+
         self.root.title(f"WinLock {LOCAL_VERSION}")
-        self.root.geometry("410x375")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._quit_app)
 
@@ -1694,8 +1829,6 @@ class WinLock:
             self.root.iconbitmap(resource_path("winlock.ico"))
         except Exception:
             pass
-
-        self.center_window(self.root)
 
         self.style = ttk.Style(self.root)
         self.style.theme_use("clam")
@@ -1709,6 +1842,9 @@ class WinLock:
         )
 
         self.create_setup_window()
+
+    def _px(self, value):
+        return max(1, int(round(value * self.dpi_scale)))
 
     def _enqueue_key(self, kind, payload=None):
         with self._key_events_lock:
@@ -1726,13 +1862,17 @@ class WinLock:
                 self._event_dedupe[dedupe_key] = now_mono
             self.security_events.append((ts, level, message))
 
-    def center_window(self, win):
-        """Centra una ventana de tkinter en la pantalla principal."""
+    def center_window(self, win, min_width=0, min_height=0):
+        """Ajusta al tamaño requerido (compatible con DPI alto) y centra la ventana."""
         win.update_idletasks()
-        width = win.winfo_width()
-        height = win.winfo_height()
-        x = (win.winfo_screenwidth() // 2) - (width // 2)
-        y = (win.winfo_screenheight() // 2) - (height // 2)
+        width = max(min_width, win.winfo_reqwidth(), win.winfo_width())
+        height = max(min_height, win.winfo_reqheight(), win.winfo_height())
+        screen_w = win.winfo_screenwidth()
+        screen_h = win.winfo_screenheight()
+        width = min(width, max(200, screen_w - 40))
+        height = min(height, max(200, screen_h - 60))
+        x = max(0, (screen_w // 2) - (width // 2))
+        y = max(0, (screen_h // 2) - (height // 2))
         win.geometry(f"{width}x{height}+{x}+{y}")
 
     def _update_setup_caps_indicator(self, event=None):
@@ -1760,7 +1900,11 @@ class WinLock:
         if self.setup_frame:
             self.setup_frame.destroy()
 
-        self.setup_frame = ttk.Frame(self.root, padding="20 18 20 18")
+        pad_x = self._px(20)
+        pad_y = self._px(18)
+        self.setup_frame = ttk.Frame(
+            self.root, padding=(pad_x, pad_y, pad_x, pad_y)
+        )
         self.setup_frame.pack(expand=True, fill=tk.BOTH)
 
         font_style = ("Segoe UI", 10)
@@ -1779,15 +1923,19 @@ class WinLock:
         self.setup_caps_label.pack(side=tk.RIGHT)
 
         self.password_entry = ttk.Entry(self.setup_frame, font=font_style)
-        self.password_entry.pack(fill=tk.X, pady=(2, 10), ipady=3)
+        self.password_entry.pack(
+            fill=tk.X, pady=(self._px(2), self._px(10)), ipady=self._px(3)
+        )
 
         ttk.Label(self.setup_frame, text="Mensaje (opcional):", font=font_style).pack(
             anchor="w"
         )
         self.message_text = tk.Text(
-            self.setup_frame, height=7, width=35, wrap="word", font=font_style
+            self.setup_frame, height=6, width=35, wrap="word", font=font_style
         )
-        self.message_text.pack(fill=tk.BOTH, expand=True, pady=(2, 10))
+        self.message_text.pack(
+            fill=tk.BOTH, expand=True, pady=(self._px(2), self._px(10))
+        )
 
         admin_status = (
             "Protección máxima activa (Administrador)"
@@ -1799,8 +1947,8 @@ class WinLock:
             text=admin_status,
             font=("Segoe UI", 8),
             foreground="#2e7d32" if is_admin() else "#666666",
-            wraplength=365,
-        ).pack(anchor="w", pady=(0, 10))
+            wraplength=self._px(365),
+        ).pack(anchor="w", pady=(0, self._px(10)))
 
         self.lock_button = ttk.Button(
             self.setup_frame,
@@ -1808,7 +1956,7 @@ class WinLock:
             command=self.validate_and_confirm,
             style="Lock.TButton",
         )
-        self.lock_button.pack(pady=0, ipady=4, fill=tk.X)
+        self.lock_button.pack(pady=0, ipady=self._px(4), fill=tk.X)
 
         self.password_entry.bind("<Return>", lambda e: self.validate_and_confirm())
         self.root.bind(
@@ -1824,6 +1972,9 @@ class WinLock:
         self._update_setup_caps_indicator()
         self._poll_setup_caps()
 
+        self.center_window(
+            self.root, min_width=self._px(410), min_height=self._px(375)
+        )
         self.root.lift()
         self.root.focus_force()
         self.password_entry.focus_set()
@@ -1895,22 +2046,27 @@ class WinLock:
             cur_ctime = p_ctime
         return False
 
-    def _install_window_shield(self, win):
+    def _install_window_shield(self, win, create_shutdown_reason=True):
         """
-        Subclasifica la ventana de bloqueo para interceptar y rechazar
+        Subclasifica una ventana para interceptar y rechazar
         WM_QUERYENDSESSION, WM_ENDSESSION, WM_CLOSE y WM_SYSCOMMAND.
         """
         try:
             win.update_idletasks()
-            hwnd = user32.GetParent(win.winfo_id()) or win.winfo_id()
+            hwnd = _get_toplevel_hwnd(win)
             if not hwnd:
+                return
+            if any(entry["hwnd"] == hwnd for entry in self._shielded_windows):
                 return
 
             kernel32.SetProcessShutdownParameters(0x3FF, 0)
-            user32.ShutdownBlockReasonCreate(
-                hwnd,
-                "WinLock: Este equipo está bloqueado. Desbloquee antes de apagar o reiniciar.",
-            )
+            if create_shutdown_reason:
+                user32.ShutdownBlockReasonCreate(
+                    hwnd,
+                    "WinLock: Este equipo está bloqueado. Desbloquee antes de apagar o reiniciar.",
+                )
+
+            state = {"orig": None, "ref": None}
 
             def _shield_wndproc(h, msg, wParam, lParam):
                 if self._is_locked:
@@ -1930,39 +2086,46 @@ class WinLock:
                         return 0
                     if msg == WM_SYSCOMMAND and (wParam & 0xFFF0) in BLOCKED_SYSCOMMANDS:
                         return 0
-                if self._orig_wndproc:
+                if state["orig"]:
                     return user32.CallWindowProcW(
-                        self._orig_wndproc, h, msg, wParam, lParam
+                        state["orig"], h, msg, wParam, lParam
                     )
                 return 0
 
-            self._wndproc_ref = WNDPROC(_shield_wndproc)
-            ptr = ctypes.cast(self._wndproc_ref, ctypes.c_void_p)
+            wndproc_ref = WNDPROC(_shield_wndproc)
+            ptr = ctypes.cast(wndproc_ref, ctypes.c_void_p)
             old = _set_window_long_ptr(hwnd, GWLP_WNDPROC, ptr)
             if old:
-                self._shielded_hwnd = hwnd
-                self._orig_wndproc = old
-                write_log("Escudo anti-apagado (WM_QUERYENDSESSION) instalado.")
+                state["orig"] = old
+                state["ref"] = wndproc_ref
+                self._shielded_windows.append(
+                    {
+                        "hwnd": hwnd,
+                        "orig": old,
+                        "ref": wndproc_ref,
+                        "reason": create_shutdown_reason,
+                    }
+                )
+                if create_shutdown_reason:
+                    write_log("Escudo anti-apagado (WM_QUERYENDSESSION) instalado.")
         except Exception as e:
             write_log(f"Error instalando escudo de ventana: {e}")
 
     def _remove_window_shield(self):
         """Restaura el WndProc original y elimina el bloqueo de apagado."""
-        if self._shielded_hwnd:
+        for entry in reversed(self._shielded_windows):
+            hwnd = entry["hwnd"]
             try:
-                if self._orig_wndproc:
-                    _set_window_long_ptr(
-                        self._shielded_hwnd, GWLP_WNDPROC, self._orig_wndproc
-                    )
+                if entry.get("orig"):
+                    _set_window_long_ptr(hwnd, GWLP_WNDPROC, entry["orig"])
             except Exception:
                 pass
-            try:
-                user32.ShutdownBlockReasonDestroy(self._shielded_hwnd)
-            except Exception:
-                pass
-            self._shielded_hwnd = None
-            self._orig_wndproc = None
-            self._wndproc_ref = None
+            if entry.get("reason"):
+                try:
+                    user32.ShutdownBlockReasonDestroy(hwnd)
+                except Exception:
+                    pass
+        self._shielded_windows.clear()
 
     def start_locking_process(self):
         """Inicia todas las capas de protección manteniendo copias y terminales activos."""
@@ -2063,11 +2226,9 @@ class WinLock:
             self._watchdog_thread.join(timeout=1.5)
 
     @staticmethod
-    def _hide_and_clip_cursor(primary_mon=None):
-        """Oculta y ancla el cursor en el centro de la pantalla principal."""
+    def _clip_cursor(primary_mon=None):
+        """Ancla el cursor en el centro de la pantalla principal sin alterar ShowCursor."""
         try:
-            while user32.ShowCursor(False) >= 0:
-                pass
             if primary_mon:
                 cx = primary_mon["left"] + (primary_mon["width"] // 2)
                 cy = primary_mon["top"] + (primary_mon["height"] // 2)
@@ -2078,6 +2239,20 @@ class WinLock:
             user32.ClipCursor(ctypes.byref(rect))
             user32.SetCursorPos(cx, cy)
         except Exception as e:
+            write_log(f"Error anclando cursor: {e}")
+
+    @staticmethod
+    def _hide_and_clip_cursor(primary_mon=None):
+        """Oculta el cursor una vez y lo ancla en el centro de la pantalla principal."""
+        try:
+            ci = CURSORINFO()
+            ci.cbSize = ctypes.sizeof(CURSORINFO)
+            if not user32.GetCursorInfo(ctypes.byref(ci)) or (ci.flags & CURSOR_SHOWING):
+                for _ in range(16):
+                    if user32.ShowCursor(False) < 0:
+                        break
+            WinLock._clip_cursor(primary_mon)
+        except Exception as e:
             write_log(f"Error ocultando cursor: {e}")
 
     @staticmethod
@@ -2085,8 +2260,9 @@ class WinLock:
         """Restaura el cursor y libera el movimiento en todas las pantallas."""
         try:
             user32.ClipCursor(None)
-            while user32.ShowCursor(True) < 0:
-                pass
+            for _ in range(32):
+                if user32.ShowCursor(True) >= 0:
+                    break
         except Exception as e:
             write_log(f"Error restaurando cursor: {e}")
 
@@ -2104,9 +2280,6 @@ class WinLock:
             sec_win = tk.Toplevel(self.root)
             sec_win.title(f"WinLock Guard {idx}")
             sec_win.overrideredirect(True)
-            sec_win.geometry(
-                f"{mon['width']}x{mon['height']}+{mon['left']}+{mon['top']}"
-            )
             sec_win.attributes("-topmost", True)
             sec_win.config(cursor="none", bg="#0a0a0a")
             sec_win.protocol("WM_DELETE_WINDOW", lambda: None)
@@ -2119,7 +2292,23 @@ class WinLock:
                 bg="#0a0a0a",
                 cursor="none",
             ).pack(expand=True)
+            place_window_on_monitor(sec_win, mon)
             self.secondary_screens.append(sec_win)
+
+    def _prune_stuck_modifiers(self):
+        """Limpia modificadores cuyos KEYUP se perdieron (ej. tras Ctrl+Alt+Del)."""
+        if self._held_shifts:
+            self._held_shifts = {
+                k for k in self._held_shifts if user32.GetAsyncKeyState(k) & 0x8000
+            }
+        if self._held_ctrls:
+            self._held_ctrls = {
+                k for k in self._held_ctrls if user32.GetAsyncKeyState(k) & 0x8000
+            }
+        if self._left_alt_down and not (user32.GetAsyncKeyState(VK_LMENU) & 0x8000):
+            self._left_alt_down = False
+        if self._altgr_down and not (user32.GetAsyncKeyState(VK_RMENU) & 0x8000):
+            self._altgr_down = False
 
     def _on_raw_key_event(self, vk, scan_code, flags, is_down):
         """
@@ -2134,6 +2323,7 @@ class WinLock:
                 self._held_shifts.add(vk)
             else:
                 self._held_shifts.discard(vk)
+                self._held_shifts.discard(VK_SHIFT)
             return
 
         if vk == VK_RMENU or (vk == VK_MENU and (flags & LLKHF_EXTENDED)):
@@ -2149,6 +2339,7 @@ class WinLock:
                 self._held_ctrls.add(vk)
             else:
                 self._held_ctrls.discard(vk)
+                self._held_ctrls.discard(VK_CONTROL)
             return
 
         if vk == VK_CAPITAL:
@@ -2163,6 +2354,8 @@ class WinLock:
 
         if vk in BLOCKED_VK_CODES:
             return
+
+        self._prune_stuck_modifiers()
 
         if self._left_alt_down:
             return
@@ -2211,14 +2404,13 @@ class WinLock:
         lock_win = self.primary_lock_window
         lock_win.title("WinLock - Bloqueado")
         lock_win.overrideredirect(True)
-        lock_win.geometry(
-            f"{primary_mon['width']}x{primary_mon['height']}+{primary_mon['left']}+{primary_mon['top']}"
-        )
         lock_win.attributes("-topmost", True)
         lock_win.config(cursor="none", bg="#1c1c1c")
         lock_win.protocol("WM_DELETE_WINDOW", lambda: None)
 
-        self._install_window_shield(lock_win)
+        place_window_on_monitor(lock_win, primary_mon)
+        self._install_window_shield(lock_win, create_shutdown_reason=True)
+        self._install_window_shield(self.root, create_shutdown_reason=False)
 
         tk.Label(
             lock_win,
@@ -2227,7 +2419,7 @@ class WinLock:
             fg="#808080",
             bg="#1c1c1c",
             cursor="none",
-        ).place(x=15, y=15, anchor="nw")
+        ).place(x=self._px(15), y=self._px(15), anchor="nw")
 
         tk.Label(
             lock_win,
@@ -2236,12 +2428,12 @@ class WinLock:
             fg="white",
             bg="#1c1c1c",
             cursor="none",
-        ).pack(pady=(55, 0))
+        ).pack(pady=(self._px(45), 0))
 
         time_label = tk.Label(
             lock_win, font=("Segoe UI Light", 64), fg="white", bg="#1c1c1c", cursor="none"
         )
-        time_label.pack(pady=(12, 0))
+        time_label.pack(pady=(self._px(10), 0))
 
         date_label = tk.Label(
             lock_win,
@@ -2255,7 +2447,7 @@ class WinLock:
         duration_label = tk.Label(
             lock_win, font=("Segoe UI", 12), fg="#A0A0A0", bg="#1c1c1c", cursor="none"
         )
-        duration_label.pack(pady=10)
+        duration_label.pack(pady=self._px(8))
 
         center_frame = tk.Frame(lock_win, bg="#1c1c1c", cursor="none")
         center_frame.pack(expand=True)
@@ -2267,7 +2459,7 @@ class WinLock:
             fg="#cccccc",
             bg="#1c1c1c",
             cursor="none",
-        ).pack(pady=(10, 5))
+        ).pack(pady=(self._px(10), self._px(5)))
 
         entry_frame = tk.Frame(
             center_frame,
@@ -2276,7 +2468,7 @@ class WinLock:
             highlightbackground="#333333",
             cursor="none",
         )
-        entry_frame.pack(pady=(0, 8))
+        entry_frame.pack(pady=(0, self._px(8)))
 
         unlock_entry = tk.Entry(
             entry_frame,
@@ -2296,7 +2488,7 @@ class WinLock:
             state="readonly",
             cursor="none",
         )
-        unlock_entry.pack(ipady=8)
+        unlock_entry.pack(ipady=self._px(8))
 
         # Texto fijo y oculto mediante color de fondo para no desplazar ningún elemento
         caps_label = tk.Label(
@@ -2307,7 +2499,7 @@ class WinLock:
             bg="#1c1c1c",
             cursor="none",
         )
-        caps_label.pack(pady=(0, 2))
+        caps_label.pack(pady=(0, self._px(2)))
 
         status_label = tk.Label(
             center_frame,
@@ -2317,7 +2509,7 @@ class WinLock:
             bg="#1c1c1c",
             cursor="none",
         )
-        status_label.pack(pady=4)
+        status_label.pack(pady=self._px(4))
 
         if self.lock_message_optional:
             message_frame = tk.Frame(
@@ -2325,11 +2517,11 @@ class WinLock:
                 bg="#252525",
                 bd=1,
                 relief="solid",
-                padx=15,
-                pady=10,
+                padx=self._px(15),
+                pady=self._px(10),
                 cursor="none",
             )
-            message_frame.pack(pady=(12, 0))
+            message_frame.pack(pady=(self._px(12), 0))
             tk.Label(
                 message_frame,
                 text="Mensaje del propietario:",
@@ -2344,13 +2536,13 @@ class WinLock:
                 font=("Segoe UI", 11),
                 fg="#cccccc",
                 bg="#252525",
-                wraplength=600,
+                wraplength=min(self._px(600), max(300, primary_mon["width"] - 120)),
                 justify="center",
                 cursor="none",
-            ).pack(pady=(5, 0))
+            ).pack(pady=(self._px(5), 0))
 
         bottom_frame = tk.Frame(lock_win, bg="#1c1c1c", cursor="none")
-        bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=20)
+        bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=self._px(18))
         tk.Label(
             bottom_frame,
             text="Este equipo está protegido con WinLock. Todos los intentos quedan registrados.",
@@ -2530,9 +2722,7 @@ class WinLock:
                         p_mon = next((m for m in mons if m["is_primary"]), mons[0])
                         s_mons = [m for m in mons if m != p_mon]
                         current_primary["mon"] = p_mon
-                        lock_win.geometry(
-                            f"{p_mon['width']}x{p_mon['height']}+{p_mon['left']}+{p_mon['top']}"
-                        )
+                        place_window_on_monitor(lock_win, p_mon)
                         self._build_secondary_screens(s_mons)
 
                 if not self._input_blocker.is_active:
@@ -2545,15 +2735,13 @@ class WinLock:
                     )
 
                 hide_taskbars()
-                self._hide_and_clip_cursor(current_primary["mon"])
+                self._clip_cursor(current_primary["mon"])
 
-                primary_hwnd = (
-                    user32.GetParent(lock_win.winfo_id()) or lock_win.winfo_id()
-                )
+                primary_hwnd = _get_toplevel_hwnd(lock_win)
                 lock_hwnds = {primary_hwnd}
                 for sw in self.secondary_screens:
                     if sw.winfo_exists():
-                        lock_hwnds.add(user32.GetParent(sw.winfo_id()) or sw.winfo_id())
+                        lock_hwnds.add(_get_toplevel_hwnd(sw))
 
                 fg = user32.GetForegroundWindow()
                 if fg and fg not in lock_hwnds:
@@ -2574,7 +2762,8 @@ class WinLock:
                 for sw in self.secondary_screens:
                     force_window_topmost(sw)
                 force_window_topmost(lock_win)
-                user32.SetForegroundWindow(primary_hwnd)
+                if primary_hwnd:
+                    user32.SetForegroundWindow(primary_hwnd)
             except Exception:
                 pass
 
@@ -2582,6 +2771,7 @@ class WinLock:
                 lock_win.after(200, enforce_protection)
 
         self._input_blocker.start()
+        lock_win.focus_force()
 
         update_time_and_duration()
         process_key_queue()
@@ -2598,7 +2788,6 @@ class WinLock:
 
             popup = tk.Toplevel(self.root)
             popup.title(f"Resumen de sesión - WinLock {LOCAL_VERSION}")
-            popup.geometry("560x500")
             popup.resizable(False, False)
             popup.configure(bg="#161616")
 
@@ -2606,12 +2795,6 @@ class WinLock:
                 popup.iconbitmap(resource_path("winlock.ico"))
             except Exception:
                 pass
-
-            self.center_window(popup)
-            popup.attributes("-topmost", True)
-            popup.after(
-                250, lambda: popup.winfo_exists() and popup.attributes("-topmost", False)
-            )
 
             def close_popup(event=None):
                 try:
@@ -2622,7 +2805,9 @@ class WinLock:
 
             popup.protocol("WM_DELETE_WINDOW", close_popup)
 
-            header = tk.Frame(popup, bg="#1f1f1f", padx=22, pady=16)
+            header = tk.Frame(
+                popup, bg="#1f1f1f", padx=self._px(22), pady=self._px(16)
+            )
             header.pack(fill=tk.X)
 
             badge_color = (
@@ -2653,8 +2838,8 @@ class WinLock:
                 font=("Segoe UI", 8, "bold"),
                 fg="#ffffff",
                 bg=badge_color,
-                padx=8,
-                pady=3,
+                padx=self._px(8),
+                pady=self._px(3),
             ).pack(side=tk.RIGHT)
 
             tk.Label(
@@ -2663,9 +2848,11 @@ class WinLock:
                 font=("Segoe UI", 9),
                 fg="#a0a0a0",
                 bg="#1f1f1f",
-            ).pack(anchor="w", pady=(4, 0))
+            ).pack(anchor="w", pady=(self._px(4), 0))
 
-            stats_frame = tk.Frame(popup, bg="#161616", padx=20, pady=14)
+            stats_frame = tk.Frame(
+                popup, bg="#161616", padx=self._px(20), pady=self._px(14)
+            )
             stats_frame.pack(fill=tk.X)
             stats_frame.columnconfigure(0, weight=1)
             stats_frame.columnconfigure(1, weight=1)
@@ -2677,10 +2864,10 @@ class WinLock:
                     bg="#222222",
                     highlightthickness=1,
                     highlightbackground="#303030",
-                    padx=12,
-                    pady=10,
+                    padx=self._px(12),
+                    pady=self._px(10),
                 )
-                card.grid(row=0, column=col, sticky="nsew", padx=4)
+                card.grid(row=0, column=col, sticky="nsew", padx=self._px(4))
                 tk.Label(
                     card,
                     text=title,
@@ -2694,7 +2881,7 @@ class WinLock:
                     font=("Segoe UI", 14, "bold"),
                     fg=val_color,
                     bg="#222222",
-                ).pack(anchor="w", pady=(2, 0))
+                ).pack(anchor="w", pady=(self._px(2), 0))
 
             make_stat_card(
                 0, "Tiempo total bloqueado", format_duration(total_seconds), "#4da6ff"
@@ -2712,7 +2899,7 @@ class WinLock:
                 "#f0ad4e" if has_incidents else "#e0e0e0",
             )
 
-            events_container = tk.Frame(popup, bg="#161616", padx=24)
+            events_container = tk.Frame(popup, bg="#161616", padx=self._px(24))
             events_container.pack(fill=tk.BOTH, expand=True)
 
             tk.Label(
@@ -2721,7 +2908,7 @@ class WinLock:
                 font=("Segoe UI", 10, "bold"),
                 fg="#d9d9d9",
                 bg="#161616",
-            ).pack(anchor="w", pady=(0, 6))
+            ).pack(anchor="w", pady=(0, self._px(6)))
 
             log_box_frame = tk.Frame(
                 events_container,
@@ -2740,7 +2927,8 @@ class WinLock:
                 fg="#d4d4d4",
                 font=("Consolas", 9),
                 relief="flat",
-                bd=8,
+                bd=self._px(8),
+                height=10,
                 wrap="word",
                 yscrollcommand=scrollbar.set,
                 cursor="arrow",
@@ -2772,7 +2960,9 @@ class WinLock:
             events_text.see(tk.END)
             events_text.config(state="disabled")
 
-            footer = tk.Frame(popup, bg="#161616", padx=24, pady=16)
+            footer = tk.Frame(
+                popup, bg="#161616", padx=self._px(24), pady=self._px(16)
+            )
             footer.pack(fill=tk.X)
 
             def open_logs_folder():
@@ -2791,8 +2981,8 @@ class WinLock:
                 activebackground="#3a3a3a",
                 activeforeground="#ffffff",
                 relief="flat",
-                padx=12,
-                pady=6,
+                padx=self._px(12),
+                pady=self._px(6),
                 cursor="hand2",
             ).pack(side=tk.LEFT)
 
@@ -2806,11 +2996,19 @@ class WinLock:
                 activebackground="#106ebe",
                 activeforeground="#ffffff",
                 relief="flat",
-                padx=20,
-                pady=6,
+                padx=self._px(20),
+                pady=self._px(6),
                 cursor="hand2",
             )
             close_btn.pack(side=tk.RIGHT)
+
+            self.center_window(
+                popup, min_width=self._px(560), min_height=self._px(500)
+            )
+            popup.attributes("-topmost", True)
+            popup.after(
+                250, lambda: popup.winfo_exists() and popup.attributes("-topmost", False)
+            )
 
             popup.bind("<Return>", close_popup)
             popup.bind("<Escape>", close_popup)
@@ -2911,7 +3109,7 @@ class WinLock:
 # ==============================================================================
 
 def _build_clean_subprocess_env():
-    """Devuelve el entorno del proceso limpiando variables heredadas de PyInstaller."""
+    """Devuelve el entorno del proceso limpiando variables heredadas de PyInstaller/Nuitka."""
     env = os.environ.copy()
     for var in (
         "_MEIPASS",
@@ -2922,6 +3120,13 @@ def _build_clean_subprocess_env():
         "_PYI_SPLASH_IPC",
         "TCL_LIBRARY",
         "TK_LIBRARY",
+        "NUITKA_ONEFILE_PARENT",
+        "NUITKA_ONEFILE_BINARY",
+        "NUITKA_ONEFILE_DIRECTORY",
+        "NUITKA_ONEFILE_START",
+        "NUITKA_ONEFILE_TIME_US",
+        "NUITKA_ONEFILE_RANDOM",
+        "NUITKA_ORIGINAL_ARGV0",
     ):
         env.pop(var, None)
     return env
@@ -2929,12 +3134,18 @@ def _build_clean_subprocess_env():
 
 def _collect_self_pids(target_exe):
     """
-    Devuelve nuestro PID y, en ejecutables PyInstaller --onefile,
-    también el PID del bootloader padre que mantiene el bloqueo del .exe.
+    Devuelve nuestro PID y el PID del proceso padre/bootstrapper (Nuitka --onefile
+    o PyInstaller --onefile) que mantiene el bloqueo del .exe en disco.
     """
     my_pid = os.getpid()
     pids = [my_pid]
     try:
+        nuitka_parent = os.environ.get("NUITKA_ONEFILE_PARENT", "").strip()
+        if nuitka_parent.isdigit():
+            npid = int(nuitka_parent)
+            if npid > 0 and npid not in pids:
+                pids.append(npid)
+
         norm_target = os.path.normcase(os.path.abspath(target_exe))
         procs = list_processes()
         if my_pid in procs:
@@ -3224,6 +3435,13 @@ def _launch_cmd_updater_fallback(target_exe, new_exe, backup_exe, staging_dir, w
         "set _PYI_SPLASH_IPC=\r\n"
         "set TCL_LIBRARY=\r\n"
         "set TK_LIBRARY=\r\n"
+        "set NUITKA_ONEFILE_PARENT=\r\n"
+        "set NUITKA_ONEFILE_BINARY=\r\n"
+        "set NUITKA_ONEFILE_DIRECTORY=\r\n"
+        "set NUITKA_ONEFILE_START=\r\n"
+        "set NUITKA_ONEFILE_TIME_US=\r\n"
+        "set NUITKA_ONEFILE_RANDOM=\r\n"
+        "set NUITKA_ORIGINAL_ARGV0=\r\n"
         'start "" /D "{workdir}" "{target}" --updated --cleanup-update "{staging}"\r\n'
         'del /f /q "{new}" >nul 2>&1\r\n'
         'del /f /q "{backup}" >nul 2>&1\r\n'
@@ -3341,11 +3559,15 @@ function Copy-InPlace {
     }
 }
 
-function Clear-PyInstallerEnv {
+function Clear-BundlerEnv {
     foreach ($v in @(
         "_MEIPASS", "_MEIPASS2", "_PYI_APPLICATION_HOME_DIR",
         "_PYI_ARCHIVE_FILE", "_PYI_PARENT_PROCESS_LEVEL",
-        "_PYI_SPLASH_IPC", "TCL_LIBRARY", "TK_LIBRARY"
+        "_PYI_SPLASH_IPC", "TCL_LIBRARY", "TK_LIBRARY",
+        "NUITKA_ONEFILE_PARENT", "NUITKA_ONEFILE_BINARY",
+        "NUITKA_ONEFILE_DIRECTORY", "NUITKA_ONEFILE_START",
+        "NUITKA_ONEFILE_TIME_US", "NUITKA_ONEFILE_RANDOM",
+        "NUITKA_ORIGINAL_ARGV0"
     )) {
         [Environment]::SetEnvironmentVariable($v, $null, "Process")
     }
@@ -3353,7 +3575,7 @@ function Clear-PyInstallerEnv {
 
 function Start-TargetApp {
     param([bool]$PassUpdatedArgs)
-    Clear-PyInstallerEnv
+    Clear-BundlerEnv
     $argStr = ""
     if ($PassUpdatedArgs) {
         $argStr = '--updated --cleanup-update "' + $stagingDir + '"'
@@ -3582,19 +3804,24 @@ def show_startup_and_check_updates():
     except Exception:
         pass
 
+    dpi_scale = get_dpi_scale(splash)
+
+    def px(v):
+        return max(1, int(round(v * dpi_scale)))
+
     def resize_and_center(min_w=430, min_h=175):
         splash.update_idletasks()
-        w = max(min_w, splash.winfo_reqwidth())
-        h = max(min_h, splash.winfo_reqheight())
-        x = (splash.winfo_screenwidth() // 2) - (w // 2)
-        y = (splash.winfo_screenheight() // 2) - (h // 2)
+        w = max(px(min_w), splash.winfo_reqwidth())
+        h = max(px(min_h), splash.winfo_reqheight())
+        x = max(0, (splash.winfo_screenwidth() // 2) - (w // 2))
+        y = max(0, (splash.winfo_screenheight() // 2) - (h // 2))
         splash.geometry(f"{w}x{h}+{x}+{y}")
 
     style = ttk.Style(splash)
     style.theme_use("clam")
     style.configure("Primary.TButton", font=("Segoe UI", 9, "bold"))
 
-    container = ttk.Frame(splash, padding="20 18 20 18")
+    container = ttk.Frame(splash, padding=(px(20), px(18), px(20), px(18)))
     container.pack(expand=True, fill=tk.BOTH)
 
     ttk.Label(
@@ -3608,7 +3835,7 @@ def show_startup_and_check_updates():
         text="Comprobando actualizaciones...",
         font=("Segoe UI", 9),
         foreground="#555555",
-    ).pack(anchor="w", pady=(5, 10))
+    ).pack(anchor="w", pady=(px(5), px(10)))
 
     progress = ttk.Progressbar(container, orient="horizontal", mode="indeterminate")
     progress.pack(fill=tk.X)
@@ -3685,9 +3912,9 @@ def show_startup_and_check_updates():
             text=error_text,
             font=("Segoe UI", 9),
             foreground="#444444",
-            wraplength=390,
+            wraplength=px(390),
             justify="left",
-        ).pack(anchor="w", pady=(6, 12))
+        ).pack(anchor="w", pady=(px(6), px(12)))
 
         btn_row = ttk.Frame(container)
         btn_row.pack(fill=tk.X)
@@ -3710,7 +3937,7 @@ def show_startup_and_check_updates():
             text="Reintentar",
             style="Primary.TButton",
             command=lambda: start_autoupdate(latest_info),
-        ).pack(side=tk.RIGHT, padx=(6, 0))
+        ).pack(side=tk.RIGHT, padx=(px(6), 0))
 
         ttk.Button(
             btn_row,
@@ -3724,14 +3951,14 @@ def show_startup_and_check_updates():
         if state["closed"] or not splash.winfo_exists():
             return
 
-        is_frozen = bool(getattr(sys, "frozen", False))
+        compiled = is_compiled_executable()
         remote_tag = str(latest_info.get("tag_name") or "").strip()
         dl_url = str(latest_info.get("download_url") or "").strip()
         declared_size_bytes = parse_human_size(latest_info.get("size"))
         expected_sha256 = latest_info.get("sha256")
 
-        if is_frozen:
-            target_exe = os.path.abspath(sys.executable)
+        if compiled:
+            target_exe = get_executable_path()
         else:
             script_dir = os.path.dirname(os.path.abspath(__file__))
             target_exe = os.path.join(script_dir, "WinLock.exe")
@@ -3766,7 +3993,7 @@ def show_startup_and_check_updates():
             mode="indeterminate" if not declared_size_bytes else "determinate",
             maximum=100,
         )
-        pb.pack(fill=tk.X, pady=(10, 6))
+        pb.pack(fill=tk.X, pady=(px(10), px(6)))
         if not declared_size_bytes:
             pb.start(12)
 
@@ -3779,7 +4006,7 @@ def show_startup_and_check_updates():
         st.pack(anchor="w")
 
         footer = ttk.Frame(container)
-        footer.pack(fill=tk.X, pady=(10, 0))
+        footer.pack(fill=tk.X, pady=(px(10), 0))
 
         cancel_btn = ttk.Button(
             footer,
@@ -3817,7 +4044,7 @@ def show_startup_and_check_updates():
                 update_ui(100, "Instalando y reiniciando WinLock...")
                 splash.update_idletasks()
 
-                if is_frozen:
+                if compiled:
                     state["updating"] = True
                     launch_inplace_updater(
                         target_exe=target_exe,
@@ -3868,6 +4095,7 @@ def show_startup_and_check_updates():
                 )
 
                 if cancel_ev.is_set() or state["closed"]:
+                    remove_tree(staging_dir, ignore_errors=True)
                     return
 
                 splash.after(0, update_ui, 100, "Verificando integridad del ejecutable...")
@@ -3879,13 +4107,14 @@ def show_startup_and_check_updates():
                 )
 
                 if cancel_ev.is_set() or state["closed"]:
+                    remove_tree(staging_dir, ignore_errors=True)
                     return
 
                 splash.after(0, finalize_install, staged_exe, staging_dir)
 
             except InterruptedError:
                 write_log("Autoactualización cancelada por el usuario.")
-                cleanup_current_staging()
+                remove_tree(staging_dir, ignore_errors=True)
             except Exception as ex:
                 write_log(f"Error durante la autoactualización: {ex}")
                 if not state["closed"] and not cancel_ev.is_set():
@@ -3895,6 +4124,8 @@ def show_startup_and_check_updates():
                         latest_info,
                         f"Ocurrió un error al descargar o verificar la actualización:\n{ex}",
                     )
+                else:
+                    remove_tree(staging_dir, ignore_errors=True)
 
         threading.Thread(target=download_worker, daemon=True).start()
 
@@ -3920,9 +4151,9 @@ def show_startup_and_check_updates():
             ),
             font=("Segoe UI", 9),
             foreground="#444444",
-            wraplength=390,
+            wraplength=px(390),
             justify="left",
-        ).pack(anchor="w", pady=(6, 14))
+        ).pack(anchor="w", pady=(px(6), px(14)))
 
         btn_box = ttk.Frame(container)
         btn_box.pack(fill=tk.X)
@@ -3933,7 +4164,7 @@ def show_startup_and_check_updates():
             style="Primary.TButton",
             command=lambda: start_autoupdate(latest_info),
         )
-        update_btn.pack(side=tk.RIGHT, padx=(6, 0))
+        update_btn.pack(side=tk.RIGHT, padx=(px(6), 0))
 
         ttk.Button(
             btn_box,
@@ -4010,11 +4241,6 @@ if __name__ == "__main__":
         full_emergency_restore(explicit_restore=True)
         sys.exit(0)
 
-    # Si quedó un estado pendiente de una sesión interrumpida, restaurar primero
-    if os.path.exists(RESTORE_STATE_PATH):
-        write_log("Detectado estado pendiente de sesión anterior. Restaurando sistema.")
-        full_emergency_restore(explicit_restore=True)
-
     # Margen breve si venimos de reiniciar tras actualizar o elevar permisos
     mutex_handle, is_first_instance = acquire_single_instance_mutex(
         retries=25 if (just_updated or just_elevated) else 0,
@@ -4033,9 +4259,14 @@ if __name__ == "__main__":
         + (" [Administrador]" if is_admin() else " [Usuario estándar]")
     )
 
-    # Antes de comprobar actualizaciones: avisar si no es Admin y ofrecer auto-elevación (Sí/No)
+    # Antes de restaurar estado previo o comprobar actualizaciones: ofrecer auto-elevación (Sí/No)
     if not is_admin() and prompt_admin_elevation():
         sys.exit(0)
+
+    # Si quedó un estado pendiente de una sesión interrumpida, restaurar (HKCU + HKLM si es Admin)
+    if os.path.exists(RESTORE_STATE_PATH):
+        write_log("Detectado estado pendiente de sesión anterior. Restaurando sistema.")
+        full_emergency_restore(explicit_restore=True)
 
     # Limpieza silenciosa de la carpeta temporal tras completar una autoactualización
     if "--cleanup-update" in sys.argv:
