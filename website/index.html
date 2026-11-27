@@ -532,7 +532,7 @@
             <a href="#" class="brand-link" aria-label="WinLock - Página de inicio">
                 <img src="winlock.ico" alt="Icono de WinLock" class="brand-icon" onerror="this.style.display='none'">
                 <span class="brand-title">WinLock</span>
-                <span id="navVersion" class="version-badge">v0.7</span>
+                <span id="navVersion" class="version-badge">vX.X</span>
             </a>
 
             <nav class="nav-links" aria-label="Enlaces del proyecto">
@@ -684,9 +684,9 @@
                 if (!response.ok) throw new Error('Error de conexión');
 
                 const data = await response.json();
-                const version = data.tag_name || 'v0.7';
+                const version = data.tag_name || 'vX.X';
                 const downloadUrl = data.download_url;
-                const size = data.size || '15 MB';
+                const size = data.size || 'XX.XX MB';
 
                 if (navVersion) navVersion.textContent = version;
                 if (downloadLabel) downloadLabel.textContent = `Descargar WinLock (${version})`;
