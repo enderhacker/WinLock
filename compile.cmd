@@ -276,7 +276,7 @@ try {
             throw 'The build did not receive administrator privileges.'
         }
 
-        # Validate required project files before triggering a UAC prompt.
+        # Validate required project files.
         foreach ($file in 'main.py', 'winlock.ico') {
             $itemPath = Join-Path $ProjectRoot $file
             if (-not (Test-Path -LiteralPath $itemPath -PathType Leaf)) {
@@ -287,7 +287,7 @@ try {
             }
         }
 
-        # Preserve mapped network drives, active virtualenvs, and user-installed Python across UAC.
+        # Preserve mapped network drives, active virtualenvs, and user-installed Python.
         $resolvedRoot = Resolve-MappedDrivePath $ProjectRoot
         $resolvedScript = Resolve-MappedDrivePath $ScriptFile
 
@@ -471,7 +471,6 @@ try {
         '--windows-console-mode=disable'
         '--windows-icon-from-ico=winlock.ico'
         '--enable-plugin=tk-inter'
-        '--windows-uac-admin'
         '--include-data-files=winlock.ico=winlock.ico'
         '--output-filename=WinLock.exe'
         '--remove-output'

@@ -1,4 +1,4 @@
-LOCAL_VERSION = "v0.8"
+LOCAL_VERSION = "v0.9"
 
 import sys
 
@@ -8,6 +8,7 @@ try:
     import tkinter as tk
     from tkinter import ttk, messagebox
     import time
+    import math
     import random
     import ctypes
     import ctypes.wintypes
@@ -470,6 +471,20 @@ def parse_version(version_str):
         return (0,)
 
 
+def format_duration(total_seconds):
+    """Formatea una duración en segundos como '1d 2h 3m 4s'."""
+    delta = max(0, int(total_seconds))
+    d, r = divmod(delta, 86400)
+    h, r = divmod(r, 3600)
+    m, s = divmod(r, 60)
+    return (
+        (f"{d}d " if d else "")
+        + (f"{h}h " if h else "")
+        + (f"{m}m " if m else "")
+        + f"{s}s"
+    )
+
+
 def get_app_data_dir():
     """Obtiene la carpeta de datos de WinLock."""
     try:
@@ -548,6 +563,20 @@ def broadcast_policy_change():
         )
     except Exception:
         pass
+
+
+def start_explorer_if_not_running():
+    """Verifica si explorer.exe se está ejecutando y lo inicia si no es así."""
+    try:
+        explorer_running = any(
+            (proc.info.get("name") or "").lower() == "explorer.exe"
+            for proc in psutil.process_iter(["name"])
+        )
+        if not explorer_running:
+            write_log("explorer.exe no estaba ejecutándose. Iniciando explorer.exe.")
+            subprocess.Popen("explorer.exe")
+    except Exception as e:
+        write_log(f"Aviso verificando/iniciando explorer.exe: {e}")
 
 
 class SystemGuard:
@@ -688,27 +717,73 @@ class SystemGuard:
             scheme_guid = GUID.from_string(power_backup["scheme_guid"])
             subgroup = GUID.from_string(GUID_SYSTEM_BUTTON_SUBGROUP)
             for item in power_backup.get("settings", []):
-                setting_guid = GUID.from_string(item["guid"])
-                if item.get("ac") is not None:
-                    powrprof.PowerWriteACValueIndex(
-                        None,
-                        ctypes.byref(scheme_guid),
-                        ctypes.byref(subgroup),
-                        ctypes.byref(setting_guid),
-                        int(item["ac"]),
-                    )
-                if item.get("dc") is not None:
-                    powrprof.PowerWriteDCValueIndex(
-                        None,
-                        ctypes.byref(scheme_guid),
-                        ctypes.byref(subgroup),
-                        ctypes.byref(setting_guid),
-                        int(item["dc"]),
-                    )
+                try:
+                    setting_guid = GUID.from_string(item["guid"])
+                    if item.get("ac") is not None:
+                        powrprof.PowerWriteACValueIndex(
+                            None,
+                            ctypes.byref(scheme_guid),
+                            ctypes.byref(subgroup),
+                            ctypes.byref(setting_guid),
+                            int(item["ac"]),
+                        )
+                    if item.get("dc") is not None:
+                        powrprof.PowerWriteDCValueIndex(
+                            None,
+                            ctypes.byref(scheme_guid),
+                            ctypes.byref(subgroup),
+                            ctypes.byref(setting_guid),
+                            int(item["dc"]),
+                        )
+                except Exception as e:
+                    write_log(f"Aviso restaurando ajuste de energía {item.get('guid')}: {e}")
             powrprof.PowerSetActiveScheme(None, ctypes.byref(scheme_guid))
             write_log("Botones de energía restaurados a su configuración original.")
         except Exception as e:
             write_log(f"Error restaurando botones de energía: {e}")
+
+    @classmethod
+    def _fallback_cleanup_policies(cls):
+        """
+        Limpieza segura sin archivo de respaldo: elimina únicamente las políticas
+        restrictivas de WinLock si coinciden con los valores de bloqueo.
+        Funciona con o sin permisos de Administrador (omite HKLM si no hay permisos).
+        """
+        restored = 0
+        skipped_admin = 0
+        for hive_name, subkey, value_name, _, lock_val in REG_POLICIES:
+            if value_name == "AutoEndTasks":
+                continue
+            hive = cls.HIVES.get(hive_name)
+            if not hive:
+                continue
+            try:
+                with winreg.OpenKeyEx(
+                    hive, subkey, 0, winreg.KEY_READ | winreg.KEY_SET_VALUE
+                ) as key:
+                    try:
+                        cur_val, _ = winreg.QueryValueEx(key, value_name)
+                    except FileNotFoundError:
+                        continue
+
+                    if cur_val == lock_val:
+                        if value_name == "ShutdownWithoutLogon":
+                            winreg.SetValueEx(key, value_name, 0, winreg.REG_DWORD, 1)
+                        else:
+                            winreg.DeleteValue(key, value_name)
+                        restored += 1
+            except FileNotFoundError:
+                continue
+            except PermissionError:
+                skipped_admin += 1
+                write_log(
+                    f"Sin permisos de Administrador para limpiar {hive_name}\\{subkey}\\{value_name} (continuando)."
+                )
+            except Exception as e:
+                write_log(f"Aviso en limpieza de respaldo ({value_name}): {e}")
+        write_log(
+            f"Limpieza fallback completada (políticas corregidas: {restored}, omitidas por falta de admin: {skipped_admin})."
+        )
 
     @classmethod
     def engage(cls):
@@ -746,7 +821,6 @@ class SystemGuard:
                                 }
                             )
                 except PermissionError:
-                    # HKLM sin permisos de administrador: omitir sin fallar
                     continue
                 except Exception as e:
                     write_log(f"Aviso leyendo política {hive_name}\\{subkey}\\{value_name}: {e}")
@@ -758,7 +832,6 @@ class SystemGuard:
                 "power": power_backup,
             }
 
-            # Guardar respaldo en disco ANTES de escribir las políticas restrictivas
             try:
                 tmp_path = RESTORE_STATE_PATH + ".tmp"
                 with open(tmp_path, "w", encoding="utf-8") as f:
@@ -769,7 +842,6 @@ class SystemGuard:
 
             cls._set_runonce_recovery(True)
 
-            # Aplicar políticas de bloqueo
             applied = 0
             for hive_name, subkey, value_name, rtype, lock_val in REG_POLICIES:
                 hive = cls.HIVES[hive_name]
@@ -791,18 +863,30 @@ class SystemGuard:
             write_log(f"SystemGuard activado ({applied} políticas aplicadas).")
 
     @classmethod
-    def restore(cls):
-        """Restaura exactamente el registro y los botones de energía previos."""
+    def restore(cls, force_fallback=False):
+        """
+        Restaura exactamente el registro y los botones de energía previos.
+        Si no existe respaldo o está dañado y force_fallback=True, realiza una
+        limpieza segura sin requerir privilegios de Administrador.
+        """
         with cls._lock:
             state_payload = None
+            state_corrupt = False
+
             if os.path.exists(RESTORE_STATE_PATH):
                 try:
                     with open(RESTORE_STATE_PATH, "r", encoding="utf-8") as f:
-                        state_payload = json.load(f)
+                        loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        state_payload = loaded
+                    else:
+                        state_corrupt = True
                 except Exception as e:
-                    write_log(f"Error leyendo estado de recuperación: {e}")
+                    state_corrupt = True
+                    write_log(f"Archivo de recuperación ilegible o dañado: {e}")
 
             if state_payload:
+                skipped_admin = 0
                 for entry in state_payload.get("registry", []):
                     hive = cls.HIVES.get(entry.get("hive"))
                     if not hive:
@@ -825,6 +909,10 @@ class SystemGuard:
                                 except FileNotFoundError:
                                     pass
                     except PermissionError:
+                        skipped_admin += 1
+                        write_log(
+                            f"Sin permisos de Administrador para restaurar {entry.get('hive')}\\{entry.get('name')}; continuando."
+                        )
                         continue
                     except Exception as e:
                         write_log(
@@ -840,7 +928,21 @@ class SystemGuard:
 
                 cls._set_runonce_recovery(False)
                 broadcast_policy_change()
-                write_log("SystemGuard restaurado por completo.")
+                if skipped_admin:
+                    write_log(
+                        f"SystemGuard restaurado parcialmente ({skipped_admin} entradas HKLM requieren Administrador)."
+                    )
+                else:
+                    write_log("SystemGuard restaurado por completo.")
+            elif force_fallback or state_corrupt:
+                if state_corrupt:
+                    try:
+                        os.remove(RESTORE_STATE_PATH)
+                    except OSError:
+                        pass
+                cls._fallback_cleanup_policies()
+                cls._set_runonce_recovery(False)
+                broadcast_policy_change()
 
             cls._engaged = False
 
@@ -1075,9 +1177,14 @@ class WinLock:
         self.unlock_password = ""
         self.lock_message_optional = None
         self.lock_start_time = 0
+        self.lock_start_dt = ""
         self.failed_attempts = 0
         self.last_failed_time = None
         self.cooldown_until = 0.0
+
+        self.security_events = []
+        self._events_lock = threading.Lock()
+        self._event_dedupe = {}
 
         self._watchdog_thread = None
         self._watchdog_running = False
@@ -1099,6 +1206,7 @@ class WinLock:
         self._wndproc_ref = None
 
         self.setup_frame = None
+        self.setup_caps_label = None
         self.secondary_screens = []
         self.primary_lock_window = None
         self._monitor_signature = None
@@ -1136,6 +1244,18 @@ class WinLock:
 
         self.create_setup_window()
 
+    def _record_event(self, message, level="info", dedupe_key=None, dedupe_seconds=3.0):
+        """Registra un evento cronológico de la sesión de bloqueo (thread-safe)."""
+        now_mono = time.monotonic()
+        ts = datetime.now().strftime("%H:%M:%S")
+        with self._events_lock:
+            if dedupe_key is not None:
+                last_seen = self._event_dedupe.get(dedupe_key, 0.0)
+                if now_mono - last_seen < dedupe_seconds:
+                    return
+                self._event_dedupe[dedupe_key] = now_mono
+            self.security_events.append((ts, level, message))
+
     def center_window(self, win):
         """Centra una ventana de tkinter en la pantalla principal."""
         win.update_idletasks()
@@ -1144,6 +1264,25 @@ class WinLock:
         x = (win.winfo_screenwidth() // 2) - (width // 2)
         y = (win.winfo_screenheight() // 2) - (height // 2)
         win.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _update_setup_caps_indicator(self, event=None):
+        """Actualiza el aviso de Bloq Mayús en la ventana inicial sin mover elementos."""
+        if (
+            not self.setup_frame
+            or not self.setup_frame.winfo_exists()
+            or not self.setup_caps_label
+            or not self.setup_caps_label.winfo_exists()
+        ):
+            return
+        caps_on = bool(user32.GetKeyState(0x14) & 1)
+        self.setup_caps_label.config(text="Bloq Mayús activado" if caps_on else "")
+
+    def _poll_setup_caps(self):
+        """Mantiene sincronizado el indicador de Bloq Mayús mientras existe la ventana inicial."""
+        if not self.setup_frame or not self.setup_frame.winfo_exists():
+            return
+        self._update_setup_caps_indicator()
+        self.setup_frame.after(200, self._poll_setup_caps)
 
     def create_setup_window(self):
         """Crea la ventana inicial con contraseña siempre visible y sin repetición."""
@@ -1156,7 +1295,19 @@ class WinLock:
 
         font_style = ("Segoe UI", 10)
 
-        ttk.Label(self.setup_frame, text="Contraseña:", font=font_style).pack(anchor="w")
+        pwd_header = ttk.Frame(self.setup_frame)
+        pwd_header.pack(fill=tk.X)
+        ttk.Label(pwd_header, text="Contraseña:", font=font_style).pack(side=tk.LEFT)
+        self.setup_caps_label = ttk.Label(
+            pwd_header,
+            text="",
+            font=("Segoe UI", 9, "bold"),
+            foreground="#d97706",
+            width=20,
+            anchor="e",
+        )
+        self.setup_caps_label.pack(side=tk.RIGHT)
+
         self.password_entry = ttk.Entry(self.setup_frame, font=font_style)
         self.password_entry.pack(fill=tk.X, pady=(2, 10), ipady=3)
 
@@ -1190,6 +1341,18 @@ class WinLock:
         self.lock_button.pack(pady=0, ipady=4, fill=tk.X)
 
         self.password_entry.bind("<Return>", lambda e: self.validate_and_confirm())
+        self.root.bind(
+            "<KeyPress-Caps_Lock>",
+            lambda e: self.root.after(10, self._update_setup_caps_indicator),
+        )
+        self.root.bind(
+            "<KeyRelease-Caps_Lock>",
+            lambda e: self.root.after(10, self._update_setup_caps_indicator),
+        )
+        self.root.bind("<FocusIn>", self._update_setup_caps_indicator)
+
+        self._update_setup_caps_indicator()
+        self._poll_setup_caps()
 
         self.root.lift()
         self.root.focus_force()
@@ -1228,6 +1391,7 @@ class WinLock:
         write_log("Confirmado bloqueo por el usuario.")
         self.setup_frame.destroy()
         self.setup_frame = None
+        self.setup_caps_label = None
         self.root.withdraw()
         self.start_locking_process()
 
@@ -1271,7 +1435,6 @@ class WinLock:
             if not hwnd:
                 return
 
-            # Notificar primero a WinLock si Windows intenta apagar, antes de cerrar otras apps
             kernel32.SetProcessShutdownParameters(0x3FF, 0)
             user32.ShutdownBlockReasonCreate(
                 hwnd,
@@ -1282,6 +1445,12 @@ class WinLock:
                 if self._is_locked:
                     if msg == WM_QUERYENDSESSION:
                         write_log("Intento de apagado/cierre de sesión interceptado y bloqueado.")
+                        self._record_event(
+                            "Intento de apagado o cierre de sesión interceptado.",
+                            level="alert",
+                            dedupe_key="shutdown_wm",
+                            dedupe_seconds=2.0,
+                        )
                         abort_system_shutdown()
                         return 0
                     if msg == WM_ENDSESSION:
@@ -1329,10 +1498,23 @@ class WinLock:
         write_log("Iniciando proceso de bloqueo blindado.")
         self._is_locked = True
         self.lock_start_time = time.time()
+        self.lock_start_dt = datetime.now().strftime("%H:%M:%S")
         self.failed_attempts = 0
         self.last_failed_time = None
         self.cooldown_until = 0.0
         self._caps_lock_on = bool(user32.GetKeyState(0x14) & 1)
+
+        while not self._key_queue.empty():
+            try:
+                self._key_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        with self._events_lock:
+            self.security_events = []
+            self._event_dedupe = {}
+
+        self._record_event("Equipo bloqueado e inicio de protección.", level="info")
 
         self._snapshot_preexisting_processes()
         SystemGuard.engage()
@@ -1340,7 +1522,6 @@ class WinLock:
         self.start_watchdog()
 
         try:
-            # ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED | ES_AWAYMODE_REQUIRED
             kernel32.SetThreadExecutionState(
                 0x80000000 | 0x00000001 | 0x00000002 | 0x00000040
             )
@@ -1362,6 +1543,12 @@ class WinLock:
                 if name in ALWAYS_KILL_TARGETS:
                     proc.kill()
                     write_log(f"Proceso bloqueado eliminado: {name} (PID {proc.pid})")
+                    self._record_event(
+                        f"Proceso bloqueado terminado: {name}",
+                        level="alert",
+                        dedupe_key=f"kill:{name}",
+                        dedupe_seconds=2.5,
+                    )
                     if name in ("shutdown.exe", "logoff.exe", "slidetoshutdown.exe"):
                         abort_system_shutdown()
                 elif name in NEW_INSTANCE_BLOCK_TARGETS:
@@ -1374,6 +1561,12 @@ class WinLock:
                     proc.kill()
                     write_log(
                         f"Nueva instancia bloqueada eliminada: {name} (PID {proc.pid})"
+                    )
+                    self._record_event(
+                        f"Nueva instancia bloqueada cerrada: {name}",
+                        level="warn",
+                        dedupe_key=f"kill_new:{name}",
+                        dedupe_seconds=2.5,
                     )
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 continue
@@ -1494,7 +1687,9 @@ class WinLock:
                 self._held_ctrls.discard(scan_code)
             return False
 
-        if name == "caps lock":
+        if name in ("caps lock", "bloq mayús", "bloq mayus") or (
+            scan_code == 58 and not event.is_keypad
+        ):
             if is_down and not self._caps_key_held:
                 self._caps_lock_on = not self._caps_lock_on
                 self._key_queue.put(("CAPS", self._caps_lock_on))
@@ -1552,7 +1747,6 @@ class WinLock:
         self._hide_and_clip_cursor(primary_mon)
         self._build_secondary_screens(secondary_mons)
 
-        # Pantalla principal interactiva
         self.primary_lock_window = tk.Toplevel(self.root)
         lock_win = self.primary_lock_window
         lock_win.title("WinLock - Bloqueado")
@@ -1644,11 +1838,12 @@ class WinLock:
         )
         unlock_entry.pack(ipady=8)
 
+        # Texto fijo y oculto mediante color de fondo para no desplazar ningún elemento
         caps_label = tk.Label(
             center_frame,
-            text="Bloq Mayús activado" if self._caps_lock_on else "",
+            text="Bloq Mayús activado",
             font=("Segoe UI", 9, "bold"),
-            fg="#f0ad4e",
+            fg="#f0ad4e" if self._caps_lock_on else "#1c1c1c",
             bg="#1c1c1c",
             cursor="none",
         )
@@ -1731,9 +1926,9 @@ class WinLock:
         def check_password():
             now = time.time()
             if now < self.cooldown_until:
-                rem = int(self.cooldown_until - now) + 1
+                rem = max(1, math.ceil(self.cooldown_until - now))
                 status_label.config(
-                    text=f"Demasiados intentos fallidos. Espere {rem}s..."
+                    text=f"Demasiados intentos fallidos ({self.failed_attempts}). Espere {rem}s..."
                 )
                 return
 
@@ -1742,6 +1937,7 @@ class WinLock:
                 write_log(
                     f"Contraseña correcta. Desbloqueando (intentos fallidos: {self.failed_attempts})."
                 )
+                self._record_event("Contraseña correcta. Equipo desbloqueado.", level="ok")
                 self._unlock_and_exit()
             else:
                 self.failed_attempts += 1
@@ -1749,20 +1945,24 @@ class WinLock:
                 write_log(
                     f"Contraseña incorrecta introducida (intento #{self.failed_attempts})."
                 )
+                self._record_event(
+                    f"Intento de contraseña incorrecta (#{self.failed_attempts}).",
+                    level="alert",
+                )
                 set_entry_text("clear")
                 flash_error_border()
 
-                if self.failed_attempts >= 11:
-                    delay = 30
-                elif self.failed_attempts >= 8:
-                    delay = 15
-                elif self.failed_attempts >= 5:
-                    delay = 5
-                else:
-                    delay = 0
-
-                if delay > 0:
+                # Cada 3 intentos fallidos obliga a esperar 10 segundos
+                if self.failed_attempts % 3 == 0:
+                    delay = 10
                     self.cooldown_until = time.time() + delay
+                    if status_clear_job["id"]:
+                        lock_win.after_cancel(status_clear_job["id"])
+                        status_clear_job["id"] = None
+                    self._record_event(
+                        f"Penalización de {delay}s activada tras {self.failed_attempts} intentos fallidos.",
+                        level="warn",
+                    )
                     status_label.config(
                         text=f"Demasiados intentos fallidos ({self.failed_attempts}). Espere {delay}s..."
                     )
@@ -1788,7 +1988,7 @@ class WinLock:
                     kind, payload = self._key_queue.get_nowait()
                     if kind == "CAPS":
                         caps_label.config(
-                            text="Bloq Mayús activado" if payload else ""
+                            fg="#f0ad4e" if payload else "#1c1c1c"
                         )
                         continue
 
@@ -1824,21 +2024,13 @@ class WinLock:
             time_label.config(text=time.strftime("%H:%M"))
             date_label.config(text=time.strftime("%A, %d de %B de %Y").capitalize())
 
-            delta = int(time.time() - self.lock_start_time)
-            d, r = divmod(delta, 86400)
-            h, r = divmod(r, 3600)
-            m, s = divmod(r, 60)
-            parts = (
-                (f"{d}d " if d else "")
-                + (f"{h}h " if h else "")
-                + (f"{m}m " if m else "")
-                + f"{s}s"
+            duration_label.config(
+                text="Tiempo bloqueado: " + format_duration(time.time() - self.lock_start_time)
             )
-            duration_label.config(text="Tiempo bloqueado: " + parts)
 
             now = time.time()
             if now < self.cooldown_until:
-                rem = int(self.cooldown_until - now) + 1
+                rem = max(1, math.ceil(self.cooldown_until - now))
                 status_label.config(
                     text=f"Demasiados intentos fallidos ({self.failed_attempts}). Espere {rem}s..."
                 )
@@ -1866,6 +2058,10 @@ class WinLock:
                         write_log(
                             "Cambio de configuración de monitores detectado. Ajustando pantallas."
                         )
+                        self._record_event(
+                            f"Cambio de monitores detectado ({len(mons)} pantalla(s) activa(s)).",
+                            level="warn",
+                        )
                         self._monitor_signature = sig
                         p_mon = next((m for m in mons if m["is_primary"]), mons[0])
                         s_mons = [m for m in mons if m != p_mon]
@@ -1875,9 +2071,14 @@ class WinLock:
                         )
                         self._build_secondary_screens(s_mons)
 
-                # Autorreparación del bloqueo de ratón si se interrumpió
                 if not self._mouse_blocker.is_active:
                     self._mouse_blocker.start()
+                    self._record_event(
+                        "Bloqueo de ratón restaurado automáticamente.",
+                        level="warn",
+                        dedupe_key="mouse_repair",
+                        dedupe_seconds=5.0,
+                    )
 
                 hide_taskbars()
                 self._hide_and_clip_cursor(current_primary["mon"])
@@ -1890,7 +2091,6 @@ class WinLock:
                     if sw.winfo_exists():
                         lock_hwnds.add(user32.GetParent(sw.winfo_id()) or sw.winfo_id())
 
-                # Ocultar al instante Menú Inicio / Búsqueda / Centro de acciones si roban foco
                 fg = user32.GetForegroundWindow()
                 if fg and fg not in lock_hwnds:
                     pid = ctypes.wintypes.DWORD(0)
@@ -1900,6 +2100,12 @@ class WinLock:
                             pname = psutil.Process(pid.value).name().lower()
                             if pname in MENU_OVERLAY_PROCESSES:
                                 user32.ShowWindow(fg, SW_HIDE)
+                                self._record_event(
+                                    f"Menú emergente del sistema ocultado ({pname}).",
+                                    level="warn",
+                                    dedupe_key=f"overlay:{pname}",
+                                    dedupe_seconds=3.0,
+                                )
                         except (
                             psutil.NoSuchProcess,
                             psutil.AccessDenied,
@@ -1924,10 +2130,241 @@ class WinLock:
         process_key_queue()
         enforce_protection()
 
+    def show_unlock_summary_popup(self, total_seconds, start_time_str, end_time_str):
+        """Muestra una ventana emergente personalizada en Tkinter con el resumen del bloqueo."""
+        try:
+            with self._events_lock:
+                events_copy = list(self.security_events)
+
+            alert_count = sum(1 for _, lvl, _ in events_copy if lvl in ("alert", "warn"))
+            has_incidents = self.failed_attempts > 0 or alert_count > 0
+
+            popup = tk.Toplevel(self.root)
+            popup.title(f"Resumen de sesión - WinLock {LOCAL_VERSION}")
+            popup.geometry("560x500")
+            popup.resizable(False, False)
+            popup.configure(bg="#161616")
+
+            try:
+                popup.iconbitmap(resource_path("winlock.ico"))
+            except Exception:
+                pass
+
+            self.center_window(popup)
+            popup.attributes("-topmost", True)
+            popup.after(250, lambda: popup.winfo_exists() and popup.attributes("-topmost", False))
+
+            def close_popup(event=None):
+                try:
+                    if popup.winfo_exists():
+                        popup.destroy()
+                except Exception:
+                    pass
+
+            popup.protocol("WM_DELETE_WINDOW", close_popup)
+
+            # Cabecera
+            header = tk.Frame(popup, bg="#1f1f1f", padx=22, pady=16)
+            header.pack(fill=tk.X)
+
+            badge_color = "#ff4d4f" if self.failed_attempts > 0 else ("#f0ad4e" if alert_count > 0 else "#2ea043")
+            badge_text = (
+                "ALERTA DE SEGURIDAD"
+                if self.failed_attempts > 0
+                else ("EVENTOS REGISTRADOS" if alert_count > 0 else "TODO BIEN")
+            )
+
+            top_row = tk.Frame(header, bg="#1f1f1f")
+            top_row.pack(fill=tk.X)
+
+            tk.Label(
+                top_row,
+                text="Equipo desbloqueado",
+                font=("Segoe UI", 16, "bold"),
+                fg="#ffffff",
+                bg="#1f1f1f",
+            ).pack(side=tk.LEFT)
+
+            tk.Label(
+                top_row,
+                text=badge_text,
+                font=("Segoe UI", 8, "bold"),
+                fg="#ffffff",
+                bg=badge_color,
+                padx=8,
+                pady=3,
+            ).pack(side=tk.RIGHT)
+
+            tk.Label(
+                header,
+                text=f"Inicio: {start_time_str}   •   Desbloqueo: {end_time_str}",
+                font=("Segoe UI", 9),
+                fg="#a0a0a0",
+                bg="#1f1f1f",
+            ).pack(anchor="w", pady=(4, 0))
+
+            # Tarjetas de estadísticas
+            stats_frame = tk.Frame(popup, bg="#161616", padx=20, pady=14)
+            stats_frame.pack(fill=tk.X)
+            stats_frame.columnconfigure(0, weight=1)
+            stats_frame.columnconfigure(1, weight=1)
+            stats_frame.columnconfigure(2, weight=1)
+
+            def make_stat_card(col, title, value, val_color="#ffffff"):
+                card = tk.Frame(
+                    stats_frame,
+                    bg="#222222",
+                    highlightthickness=1,
+                    highlightbackground="#303030",
+                    padx=12,
+                    pady=10,
+                )
+                card.grid(row=0, column=col, sticky="nsew", padx=4)
+                tk.Label(
+                    card,
+                    text=title,
+                    font=("Segoe UI", 8),
+                    fg="#9e9e9e",
+                    bg="#222222",
+                ).pack(anchor="w")
+                tk.Label(
+                    card,
+                    text=value,
+                    font=("Segoe UI", 14, "bold"),
+                    fg=val_color,
+                    bg="#222222",
+                ).pack(anchor="w", pady=(2, 0))
+
+            make_stat_card(0, "Tiempo total bloqueado", format_duration(total_seconds), "#4da6ff")
+            make_stat_card(
+                1,
+                "Intentos fallidos",
+                str(self.failed_attempts),
+                "#ff4d4f" if self.failed_attempts > 0 else "#3fb950",
+            )
+            make_stat_card(
+                2,
+                "Eventos registrados",
+                str(len(events_copy)),
+                "#f0ad4e" if has_incidents else "#e0e0e0",
+            )
+
+            # Lista de eventos ocurridos
+            events_container = tk.Frame(popup, bg="#161616", padx=24)
+            events_container.pack(fill=tk.BOTH, expand=True)
+
+            tk.Label(
+                events_container,
+                text="Registro de eventos durante el bloqueo:",
+                font=("Segoe UI", 10, "bold"),
+                fg="#d9d9d9",
+                bg="#161616",
+            ).pack(anchor="w", pady=(0, 6))
+
+            log_box_frame = tk.Frame(
+                events_container,
+                bg="#111111",
+                highlightthickness=1,
+                highlightbackground="#303030",
+            )
+            log_box_frame.pack(fill=tk.BOTH, expand=True)
+
+            scrollbar = ttk.Scrollbar(log_box_frame, orient="vertical")
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+            events_text = tk.Text(
+                log_box_frame,
+                bg="#111111",
+                fg="#d4d4d4",
+                font=("Consolas", 9),
+                relief="flat",
+                bd=8,
+                wrap="word",
+                yscrollcommand=scrollbar.set,
+                cursor="arrow",
+            )
+            events_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scrollbar.config(command=events_text.yview)
+
+            events_text.tag_configure("ts", foreground="#7a7a7a")
+            events_text.tag_configure("info", foreground="#cccccc")
+            events_text.tag_configure("warn", foreground="#f0ad4e")
+            events_text.tag_configure("alert", foreground="#ff6b6b")
+            events_text.tag_configure("ok", foreground="#3fb950")
+
+            for ts, lvl, msg in events_copy:
+                events_text.insert(tk.END, f"[{ts}] ", "ts")
+                events_text.insert(tk.END, f"{msg}\n", lvl if lvl in ("info", "warn", "alert", "ok") else "info")
+
+            if self.last_failed_time:
+                events_text.insert(
+                    tk.END,
+                    f"\nÚltimo intento fallido registrado a las {self.last_failed_time}.\n",
+                    "alert",
+                )
+
+            events_text.see(tk.END)
+            events_text.config(state="disabled")
+
+            # Botones inferiores
+            footer = tk.Frame(popup, bg="#161616", padx=24, pady=16)
+            footer.pack(fill=tk.X)
+
+            def open_logs_folder():
+                try:
+                    os.startfile(LOG_DIRECTORY)
+                except Exception as ex:
+                    write_log(f"No se pudo abrir carpeta de logs: {ex}")
+
+            tk.Button(
+                footer,
+                text="Abrir carpeta de logs",
+                command=open_logs_folder,
+                font=("Segoe UI", 9),
+                bg="#2a2a2a",
+                fg="#e0e0e0",
+                activebackground="#3a3a3a",
+                activeforeground="#ffffff",
+                relief="flat",
+                padx=12,
+                pady=6,
+                cursor="hand2",
+            ).pack(side=tk.LEFT)
+
+            close_btn = tk.Button(
+                footer,
+                text="Aceptar",
+                command=close_popup,
+                font=("Segoe UI", 10, "bold"),
+                bg="#0078d4",
+                fg="#ffffff",
+                activebackground="#106ebe",
+                activeforeground="#ffffff",
+                relief="flat",
+                padx=20,
+                pady=6,
+                cursor="hand2",
+            )
+            close_btn.pack(side=tk.RIGHT)
+
+            popup.bind("<Return>", close_popup)
+            popup.bind("<Escape>", close_popup)
+            popup.grab_set()
+            popup.lift()
+            popup.focus_force()
+            close_btn.focus_set()
+
+            self.root.wait_window(popup)
+        except Exception as e:
+            write_log(f"Error mostrando popup de resumen: {e}")
+
     def _unlock_and_exit(self):
-        """Desbloquea el sistema, restaura todas las políticas e informa intentos fallidos."""
+        """Desbloquea el sistema, restaura todas las políticas y muestra el resumen."""
         self._is_locked = False
         self.unlock_password = ""
+        total_seconds = time.time() - self.lock_start_time
+        end_time_str = datetime.now().strftime("%H:%M:%S")
+        start_time_str = self.lock_start_dt or end_time_str
 
         try:
             keyboard.unhook_all()
@@ -1960,18 +2397,7 @@ class WinLock:
                 pass
         self.secondary_screens = []
 
-        if self.failed_attempts > 0:
-            try:
-                self.root.attributes("-topmost", True)
-                messagebox.showwarning(
-                    "Alerta de seguridad - WinLock",
-                    f"Se registraron {self.failed_attempts} intento(s) fallido(s) de desbloqueo "
-                    f"mientras no estabas.\nÚltimo intento: {self.last_failed_time}",
-                    parent=self.root,
-                )
-            except Exception:
-                pass
-
+        self.show_unlock_summary_popup(total_seconds, start_time_str, end_time_str)
         self._quit_app()
 
     def _quit_app(self):
@@ -2240,15 +2666,35 @@ Remove-Item -LiteralPath '{esc_script}' -Force -ErrorAction SilentlyContinue
     return state["updating"]
 
 
-def full_emergency_restore():
-    """Restaura políticas, botones de energía, barras de tareas y cursor."""
-    SystemGuard.restore()
-    restore_taskbars()
-    WinLock._show_system_cursor()
+def full_emergency_restore(explicit_restore=False):
+    """
+    Restaura políticas, botones de energía, barras de tareas, explorer y cursor.
+    Si explicit_restore=True (--restore), realiza limpieza segura incluso sin
+    archivo de respaldo o sin permisos de Administrador.
+    """
+    try:
+        SystemGuard.restore(force_fallback=explicit_restore)
+    except Exception as e:
+        write_log(f"Aviso en SystemGuard.restore: {e}")
+
+    try:
+        restore_taskbars()
+    except Exception as e:
+        write_log(f"Aviso restaurando barras de tareas: {e}")
+
+    if explicit_restore:
+        start_explorer_if_not_running()
+
+    try:
+        WinLock._show_system_cursor()
+    except Exception as e:
+        write_log(f"Aviso restaurando cursor: {e}")
+
     try:
         kernel32.SetThreadExecutionState(0x80000000)
     except Exception:
         pass
+
     try:
         keyboard.unhook_all()
     except Exception:
@@ -2256,16 +2702,18 @@ def full_emergency_restore():
 
 
 if __name__ == "__main__":
-    # Modo silencioso de recuperación tras corte eléctrico o cierre inesperado
+    # Modo silencioso de recuperación tras corte eléctrico, fallo o ejecución manual
     if "--restore" in sys.argv:
-        write_log("Ejecutando recuperación automática (--restore).")
-        full_emergency_restore()
+        write_log(
+            f"Ejecutando recuperación robusta (--restore, admin={is_admin()})."
+        )
+        full_emergency_restore(explicit_restore=True)
         sys.exit(0)
 
     # Si quedó un estado pendiente de una sesión interrumpida, restaurar primero
     if os.path.exists(RESTORE_STATE_PATH):
         write_log("Detectado estado pendiente de sesión anterior. Restaurando sistema.")
-        full_emergency_restore()
+        full_emergency_restore(explicit_restore=True)
 
     atexit.register(full_emergency_restore)
 
