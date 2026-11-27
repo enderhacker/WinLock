@@ -1,4 +1,4 @@
-# WinLock v1.0
+# WinLock v1.1
 
 **WinLock** es una aplicación ligera para Windows que permite bloquear tu ordenador con una contraseña personalizada y un mensaje en pantalla, manteniendo tus tareas en segundo plano funcionando sin interrupciones.
 
